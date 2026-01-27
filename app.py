@@ -6,7 +6,7 @@ import pandas as pd
 import urllib.parse
 import json
 
-# --- 1. CONFIG & STYLING (Deep Dark Blue) ---
+# --- 1. CONFIG & STYLING ---
 st.set_page_config(page_title="CashFlow Pro", layout="wide", page_icon="💰")
 
 st.markdown("""
@@ -28,7 +28,7 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION LOGIC ---
+# --- 2. AUTHENTICATION ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -49,13 +49,21 @@ if st.session_state.user is None:
             rp = st.text_input("New Password", type="password")
             if st.button("Create Account"):
                 supabase.auth.sign_up({"email": re, "password": rp})
-                st.success("Success! Check email for link.")
+                st.success("Registration success! Verify your email.")
     st.stop()
 
-# Get the logged-in user ID
 u_id = st.session_state.user.id
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. ADMIN CHECK ---
+def is_admin(user_id):
+    try:
+        res = supabase.table("profiles").select("is_admin").eq("id", user_id).single().execute()
+        return res.data.get("is_admin", False)
+    except: return False
+
+user_is_admin = is_admin(u_id)
+
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
     st.write(f"Logged in: {st.session_state.user.email}")
@@ -67,9 +75,11 @@ with st.sidebar:
     my_name = st.text_input("Your Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Agency")
     st.divider()
-    page = st.radio("Navigation", ["📊 Dashboard", "📥 Data Entry", "📜 History", "👑 Super Admin"])
+    nav = ["📊 Dashboard", "📥 Data Entry", "📜 History"]
+    if user_is_admin: nav.append("👑 Super Admin")
+    page = st.radio("Navigation", nav)
 
-# --- 4. PAGE: DASHBOARD (Restored Metrics & Expanders) ---
+# --- 5. DASHBOARD ---
 if page == "📊 Dashboard":
     st.title("💸 Active Collections")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("is_deleted", False).execute()
@@ -86,7 +96,7 @@ if page == "📊 Dashboard":
         st.divider()
 
         for i, row in pending_df.iterrows():
-            with st.expander(f"📋 {row['client_name']} — ${row['amount']} (Due: {row['due_date']})"):
+            with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                 c1, c2, c3 = st.columns([2, 2, 1])
                 with c1:
                     if st.button("🪄 Craft Draft", key=f"ai_{row['id']}"):
@@ -96,12 +106,10 @@ if page == "📊 Dashboard":
                         st.rerun()
                     st.text_area("Review Email:", value=row.get('last_draft', ""), height=150, key=f"msg_{row['id']}")
                     if st.button("📧 Send SMTP", key=f"smtp_{row['id']}"): st.success("Sent!")
-                
                 with c2:
                     phone = "".join(filter(str.isdigit, str(row['phone'])))
-                    wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly nudge for the ${row['amount']} invoice.")
+                    wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly reminder for the ${row['amount']} invoice.")
                     st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp Chat</button></a>', unsafe_allow_html=True)
-                
                 with c3:
                     if st.button("✅ Paid", key=f"p_{row['id']}", use_container_width=True):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
@@ -110,7 +118,7 @@ if page == "📊 Dashboard":
     else:
         st.info("No active invoices.")
 
-# --- 5. PAGE: DATA ENTRY (Restored AI Scanner, Manual, & CSV) ---
+# --- 6. DATA ENTRY ---
 elif page == "📥 Data Entry":
     st.header("📥 Data Intake Hub")
     t1, t2, t3 = st.tabs(["📸 AI Image Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
@@ -143,14 +151,28 @@ elif page == "📥 Data Entry":
             data_list = df_csv.to_dict(orient='records')
             for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data_list).execute()
-            st.rerun()
+            st.success("Bulk Upload Complete!")
 
-# --- 6. PAGE: HISTORY & ADMIN ---
+# --- 7. HISTORY (FIXED KEYERROR) ---
 elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
-    st.dataframe(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']], use_container_width=True)
+    
+    # FIXED: Check if data exists before creating DataFrame
+    if res.data:
+        history_df = pd.DataFrame(res.data)
+        # Ensure only existing columns are selected to prevent KeyError
+        cols_to_show = [c for c in ['client_name', 'amount', 'due_date'] if c in history_df.columns]
+        st.dataframe(history_df[cols_to_show], use_container_width=True)
+    else:
+        st.info("No payment history yet.")
 
-elif page == "👑 Super Admin":
+# --- 8. SUPER ADMIN ---
+elif page == "👑 Super Admin" and user_is_admin:
     st.title("👑 Platform Overview")
-    st.write("This page shows global platform stats (Admin only logic can be added here).")
+    # This requires a service_role key to bypass RLS
+    all_res = supabase.table("invoices").select("amount, status").execute()
+    if all_res.data:
+        all_df = pd.DataFrame(all_res.data)
+        st.metric("Total Platform Revenue", f"${all_df['amount'].sum():,.2f}")
+        st.bar_chart(all_df.groupby('status')['amount'].sum())
