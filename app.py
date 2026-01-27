@@ -49,24 +49,26 @@ if st.session_state.user is None:
             rp = st.text_input("New Password", type="password")
             if st.button("Create Account"):
                 supabase.auth.sign_up({"email": re, "password": rp})
-                st.success("Registration success! Verify your email.")
+                st.success("Success! Check your email to verify.")
     st.stop()
 
 u_id = st.session_state.user.id
 
-# --- 3. ADMIN CHECK ---
-def is_admin(user_id):
+# --- 3. ADMIN CHECK (Robust version) ---
+def check_if_admin(user_id):
     try:
+        # Check profiles table for is_admin flag
         res = supabase.table("profiles").select("is_admin").eq("id", user_id).single().execute()
         return res.data.get("is_admin", False)
-    except: return False
+    except:
+        return False
 
-user_is_admin = is_admin(u_id)
+user_is_admin = check_if_admin(u_id)
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
-    st.write(f"Logged in: {st.session_state.user.email}")
+    st.write(f"Logged in: **{st.session_state.user.email}**")
     if st.button("Logout"):
         supabase.auth.sign_out()
         st.session_state.user = None
@@ -75,8 +77,11 @@ with st.sidebar:
     my_name = st.text_input("Your Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Agency")
     st.divider()
+    
+    # Navigation logic
     nav = ["📊 Dashboard", "📥 Data Entry", "📜 History"]
-    if user_is_admin: nav.append("👑 Super Admin")
+    if user_is_admin:
+        nav.append("👑 Super Admin")
     page = st.radio("Navigation", nav)
 
 # --- 5. DASHBOARD ---
@@ -108,7 +113,7 @@ if page == "📊 Dashboard":
                     if st.button("📧 Send SMTP", key=f"smtp_{row['id']}"): st.success("Sent!")
                 with c2:
                     phone = "".join(filter(str.isdigit, str(row['phone'])))
-                    wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly reminder for the ${row['amount']} invoice.")
+                    wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly nudge for the ${row['amount']} invoice.")
                     st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp Chat</button></a>', unsafe_allow_html=True)
                 with c3:
                     if st.button("✅ Paid", key=f"p_{row['id']}", use_container_width=True):
@@ -128,7 +133,7 @@ elif page == "📥 Data Entry":
         if img_f and st.button("🚀 Process with Gemini 3"):
             res = model.generate_content(["Extract client_name, amount, due_date, email, phone as JSON.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
-            data.update({"user_id": u_id, "status": "Pending"})
+            data.update({"user_id": u_id, "status": "Pending"}) # Link to user
             supabase.table("invoices").insert(data).execute()
             st.success("AI Extracted and Saved!")
 
@@ -151,28 +156,26 @@ elif page == "📥 Data Entry":
             data_list = df_csv.to_dict(orient='records')
             for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data_list).execute()
-            st.success("Bulk Upload Complete!")
+            st.rerun()
 
-# --- 7. HISTORY (FIXED KEYERROR) ---
+# --- 7. HISTORY ---
 elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
-    
-    # FIXED: Check if data exists before creating DataFrame
     if res.data:
         history_df = pd.DataFrame(res.data)
-        # Ensure only existing columns are selected to prevent KeyError
-        cols_to_show = [c for c in ['client_name', 'amount', 'due_date'] if c in history_df.columns]
-        st.dataframe(history_df[cols_to_show], use_container_width=True)
+        st.dataframe(history_df[['client_name', 'amount', 'due_date']], use_container_width=True)
     else:
         st.info("No payment history yet.")
 
-# --- 8. SUPER ADMIN ---
+# --- 8. SUPER ADMIN (Restored) ---
 elif page == "👑 Super Admin" and user_is_admin:
-    st.title("👑 Platform Overview")
-    # This requires a service_role key to bypass RLS
+    st.title("👑 Platform Control Center")
+    # This view bypasses user_id filters to show global stats
     all_res = supabase.table("invoices").select("amount, status").execute()
     if all_res.data:
         all_df = pd.DataFrame(all_res.data)
-        st.metric("Total Platform Revenue", f"${all_df['amount'].sum():,.2f}")
+        st.metric("Global Platform Revenue", f"${all_df['amount'].sum():,.2f}")
         st.bar_chart(all_df.groupby('status')['amount'].sum())
+    else:
+        st.info("No platform data yet.")
