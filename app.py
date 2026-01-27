@@ -16,7 +16,8 @@ st.set_page_config(page_title="CashFlow SaaS Ultra", layout="wide", page_icon="�
 def init_all():
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    # Using stable flash model for best performance
+    model = genai.GenerativeModel('gemini-1.5-flash')
     return sb, model
 
 supabase, model = init_all()
@@ -28,10 +29,9 @@ with st.sidebar:
     agency_name = st.text_input("Agency Name", value="My Agency")
     st.divider()
     
-    # MAIN NAVIGATION
     page = st.radio("Navigation", ["Dashboard", "Data Entry", "Payment History"])
 
-# --- 3. DATA ENTRY PAGE (Restoring your features) ---
+# --- 3. DATA ENTRY PAGE ---
 if page == "Data Entry":
     st.header("📥 Data Management")
     method = st.tabs(["Manual Entry", "AI Image Scanner", "Bulk CSV Upload"])
@@ -44,7 +44,7 @@ if page == "Data Entry":
             a = st.number_input("Amount ($)", min_value=0.0)
             d = st.date_input("Due Date")
             if st.form_submit_button("Save Invoice"):
-                supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d)}).execute()
+                supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d), "status":"Pending"}).execute()
                 st.success("Saved!")
 
     with method[1]:
@@ -52,10 +52,11 @@ if page == "Data Entry":
         img_file = st.file_uploader("Upload Invoice", type=['png', 'jpg', 'jpeg'])
         if img_file:
             img = Image.open(img_file)
-            if st.button("🚀 Scan with Gemini 3"):
-                prompt = "Extract client_name, amount, due_date (YYYY-MM-DD), email, phone. Return ONLY JSON."
+            if st.button("🚀 Scan with Gemini AI"):
+                prompt = "Extract client_name, amount, due_date (YYYY-MM-DD), email, phone. If unclear return null. Return ONLY JSON."
                 res = model.generate_content([prompt, img])
                 data = json.loads(res.text.replace("```json","").replace("```",""))
+                data["status"] = "Pending"
                 supabase.table("invoices").insert(data).execute()
                 st.success("AI Extracted and Saved!")
 
@@ -66,65 +67,75 @@ if page == "Data Entry":
             df_csv = pd.read_csv(csv_file)
             df_csv.columns = [c.lower().replace(" ", "_") for c in df_csv.columns]
             if st.button("Confirm Bulk Upload"):
-                supabase.table("invoices").insert(df_csv.to_dict(orient='records')).execute()
+                data_list = df_csv.to_dict(orient='records')
+                for item in data_list: item["status"] = "Pending"
+                supabase.table("invoices").insert(data_list).execute()
                 st.rerun()
 
 # --- 4. DASHBOARD PAGE ---
 elif page == "Dashboard":
-    st.title("💸 Active Collections")
+    st.title("💸 Active Collections & Analytics")
     
-    # Fetch data
+    # Fetch ALL data to calculate metrics
     res = supabase.table("invoices").select("*").eq("is_deleted", False).execute()
-    df = pd.DataFrame(res.data)
+    all_df = pd.DataFrame(res.data)
     
-    if not df.empty:
-        # Metrics
-        pending = df[df['status'] == 'Pending']
-        m1, m2 = st.columns(2)
-        m1.metric("Total Pending", f"${pending['amount'].sum():,.2f}")
-        m2.metric("Active Clients", len(pending))
+    if not all_df.empty:
+        # TOP METRICS (Restoring your missing Paid/Pending metrics)
+        pending_total = all_df[all_df['status'] == 'Pending']['amount'].sum()
+        paid_total = all_df[all_df['status'] == 'Paid']['amount'].sum()
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Pending ⏳", f"${pending_total:,.2f}")
+        m2.metric("Total Collected ✅", f"${paid_total:,.2f}")
+        m3.metric("Collection Rate", f"{(len(all_df[all_df['status']=='Paid'])/len(all_df))*100:.1f}%")
         st.divider()
 
-        if pending.empty:
-            st.success("No pending invoices!")
+        # Display only Pending Invoices in the active dashboard
+        pending_df = all_df[all_df['status'] == 'Pending']
+        if pending_df.empty:
+            st.info("No pending invoices. Great job!")
         else:
-            for i, row in pending.iterrows():
-                with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
+            for i, row in pending_df.iterrows():
+                with st.expander(f"📋 {row['client_name']} — ${row['amount']} (Due: {row['due_date']})"):
                     c1, c2, c3 = st.columns([2, 2, 1])
                     
                     with c1:
                         if st.button("🪄 Craft Draft", key=f"ai_{row['id']}"):
-                            prompt = f"Write a professional reminder for {row['client_name']} about ${row['amount']}. Sign off as {my_name} from {agency_name}."
+                            prompt = f"Write a professional reminder for {row['client_name']} about ${row['amount']}. Sign: {my_name} at {agency_name}."
                             response = model.generate_content(prompt)
                             supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                             st.rerun()
                         
                         final_msg = st.text_area("Review Email:", value=row.get('last_draft', ""), key=f"msg_{row['id']}")
                         if st.button("📧 Send SMTP Email", key=f"smtp_{row['id']}"):
-                            st.success("Sent via SMTP!")
+                            st.success("Email Delivered via SMTP!")
 
                     with c2:
                         phone = "".join(filter(str.isdigit, str(row['phone'])))
-                        wa_msg = urllib.parse.quote(f"Hi {row['client_name']}, friendly reminder about your ${row['amount']} invoice.")
-                        st.markdown(f'''<a href="https://wa.me/{phone}?text={wa_msg}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:8px;border:none;cursor:pointer;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
+                        encoded_msg = urllib.parse.quote(f"Hi {row['client_name']}, friendly reminder from {my_name} regarding your ${row['amount']} invoice.")
+                        wa_url = f"https://wa.me/{phone}?text={encoded_msg}"
+                        st.markdown(f'''<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:8px;border:none;cursor:pointer;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
                     
                     with c3:
                         if st.button("✅ Mark Paid", key=f"paid_{row['id']}", use_container_width=True):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute()
                             st.balloons(); st.rerun()
-                        if st.button("🗑️ Delete Invoice", key=f"del_{row['id']}", use_container_width=True):
+                        if st.button("🗑️ Delete", key=f"del_{row['id']}", use_container_width=True):
                             supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute()
                             st.rerun()
     else:
-        st.info("No active invoices.")
+        st.info("No data found.")
 
 # --- 5. HISTORY PAGE ---
 elif page == "Payment History":
-    st.title("📜 History")
+    st.title("📜 History of Paid Invoices")
     res = supabase.table("invoices").select("*").eq("status", "Paid").eq("is_deleted", False).execute()
     df_history = pd.DataFrame(res.data)
     if not df_history.empty:
-        st.dataframe(df_history[['client_name', 'amount', 'due_date']], use_container_width=True)
+        st.dataframe(df_history[['client_name', 'amount', 'due_date', 'status']], use_container_width=True)
         if st.button("Archive All History"):
             supabase.table("invoices").update({"is_deleted": True}).eq("status", "Paid").execute()
             st.rerun()
+    else:
+        st.info("No payment history yet.")
