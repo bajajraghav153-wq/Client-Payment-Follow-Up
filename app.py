@@ -21,7 +21,7 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. SIDEBAR: PROFILE & ENTRY ---
+# --- 2. SIDEBAR: PROFILE & DATA ENTRY ---
 with st.sidebar:
     st.header("🏢 Your Agency Profile")
     my_name = st.text_input("Your Name", value="Admin")
@@ -32,7 +32,7 @@ with st.sidebar:
     with st.form("add_client"):
         c_name = st.text_input("Client Name")
         c_email = st.text_input("Email")
-        # Tip: Remind user - international format ONLY, no '+'
+        # WhatsApp requirement: Country code, no '+', no spaces
         c_phone = st.text_input("Phone (e.g., 919876543210)")
         c_amt = st.number_input("Amount ($)", min_value=0.0)
         c_due = st.date_input("Due Date")
@@ -43,7 +43,27 @@ with st.sidebar:
             }).execute()
             st.rerun()
 
-# --- 3. DASHBOARD ---
+# --- 3. HELPER FUNCTIONS ---
+def send_direct_email(to_email, body):
+    sender = st.secrets["EMAIL_SENDER"]
+    pwd = st.secrets["EMAIL_PASSWORD"]
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = to_email
+    msg['Subject'] = "Update regarding our latest project"
+    msg.attach(MIMEText(body, 'plain'))
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender, pwd)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"SMTP Error: {e}")
+        return False
+
+# --- 4. MAIN DASHBOARD ---
 st.title("💸 CashFlow AI: Pro Collector")
 res = supabase.table("invoices").select("*").execute()
 df = pd.DataFrame(res.data)
@@ -56,30 +76,35 @@ if not df.empty:
             # --- EMAIL SECTION: DRAFT -> EDIT -> SEND ---
             with col1:
                 st.subheader("Humanized Email Draft")
+                draft_key = f"draft_{row['id']}"
+                
                 if st.button("🪄 Craft with Gemini 3", key=f"gen_{row['id']}"):
                     prompt = f"Write a friendly payment reminder for {row['client_name']} regarding ${row['amount']} due on {row['due_date']}. Sign off as {my_name} from {agency_name}."
-                    # Generate the text using Gemini 3
+                    # Generate content with Gemini 3 Flash
                     draft = model.generate_content(prompt).text
-                    st.session_state[f"draft_{row['id']}"] = draft
+                    st.session_state[draft_key] = draft
 
-                # Editable area: You can manually type and change this!
-                current_draft = st.session_state.get(f"draft_{row['id']}", "")
+                # Editable area: Review and change the AI's draft
+                current_draft = st.session_state.get(draft_key, "")
                 final_email = st.text_area("Review & Edit Draft:", value=current_draft, height=200, key=f"edit_{row['id']}")
                 
                 if st.button("📤 Final Approve & Send", key=f"send_{row['id']}"):
-                    # Direct SMTP Logic here...
-                    st.success("Email Approved and Sent via SMTP!")
+                    if final_email:
+                        if send_direct_email(row['email'], final_email):
+                            st.success("Email sent successfully!")
+                    else:
+                        st.warning("Generate or type a message first!")
 
             # --- WHATSAPP SECTION: FIXED FORMAT ---
             with col2:
                 st.subheader("WhatsApp Follow-up")
-                # Fix: Clean number
-                clean_phone = str(row['phone']).replace("+", "").replace(" ", "").replace("-", "")
-                wa_msg = f"Hi {row['client_name']}, friendly note from {my_name} at {agency_name} regarding your invoice for ${row['amount']}."
+                # Fix: Clean number (digits only)
+                clean_phone = "".join(filter(str.isdigit, str(row['phone'])))
                 
-                # Encode message
+                wa_msg = f"Hi {row['client_name']}, friendly note from {my_name} at {agency_name} regarding your invoice for ${row['amount']}."
+                # Encode message for safe URL
                 encoded_msg = urllib.parse.quote(wa_msg)
-                # Correct wa.me URL structure
+                
                 wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
                 
                 st.markdown(f'''
