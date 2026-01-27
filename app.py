@@ -5,103 +5,115 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import pandas as pd
 import google.generativeai as genai
+import urllib.parse # For fixing the WhatsApp 404 error
 
-# --- 1. INITIALIZE GEMINI 3 FLASH ---
+# --- 1. SETUP & PROFILE ---
+st.set_page_config(page_title="CashFlow Gemini 3 Pro", layout="wide")
+
 @st.cache_resource
 def init_all():
-    try:
-        # Connect to Supabase
-        sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-        
-        # Configure Gemini 3 Flash
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-3-flash-preview') 
-        return sb, model
-    except Exception as e:
-        st.error(f"Initialization Failed: {e}")
-        return None, None
+    sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    return sb, model
 
 supabase, model = init_all()
 
-# --- 2. HUMANIZED SMTP ENGINE ---
-def send_humanized_email(receiver_email, client_name, amount, due_date):
-    # Gemini 3 crafts the "500% human" message
-    prompt = f"""
-    You are a polite, professional assistant for a boutique agency. 
-    Write a 100% human-sounding, friendly email to {client_name} regarding 
-    a ${amount} payment due on {due_date}. 
-    Goal: High open rate, professional tone, no 'AI' sounding phrases.
-    """
+# Sidebar: User/Agency Profile
+with st.sidebar:
+    st.header("🏢 Your Agency Profile")
+    my_name = st.text_input("Your Name", value="Admin")
+    agency_name = st.text_input("Agency Name", value="My Boutique Agency")
+    st.divider()
     
+    # Existing Add Client Form
+    st.header("➕ Add New Client")
+    with st.form("add_client"):
+        c_name = st.text_input("Client Name")
+        c_email = st.text_input("Email")
+        # Tip: Remind users to use country code for WhatsApp
+        c_phone = st.text_input("Phone (Country Code first, e.g. 919876543210)")
+        c_amt = st.number_input("Amount ($)", min_value=0.0)
+        c_due = st.date_input("Due Date")
+        if st.form_submit_button("Save to SaaS"):
+            supabase.table("invoices").insert({
+                "client_name": c_name, "email": c_email, "phone": c_phone, 
+                "amount": c_amt, "due_date": str(c_due)
+            }).execute()
+            st.rerun()
+
+# --- 2. EMAIL ENGINE ---
+def send_direct_email(to_email, subject, body):
+    sender = st.secrets["EMAIL_SENDER"]
+    pwd = st.secrets["EMAIL_PASSWORD"]
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
     try:
-        # Generate content with Gemini 3 Flash
-        response = model.generate_content(prompt)
-        ai_msg = response.text
-        
-        # Direct SMTP Sending
-        sender = st.secrets["EMAIL_SENDER"]
-        pwd = st.secrets["EMAIL_PASSWORD"]
-        
-        msg = MIMEMultipart()
-        msg['From'] = sender
-        msg['To'] = receiver_email
-        msg['Subject'] = "Quick update regarding our latest project"
-        msg.attach(MIMEText(ai_msg, 'plain'))
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(sender, pwd)
         server.send_message(msg)
         server.quit()
-        return ai_msg
+        return True
     except Exception as e:
-        st.error(f"SaaS Error: {e}")
-        return None
+        st.error(f"Failed to send: {e}")
+        return False
 
-# --- 3. UI DASHBOARD ---
-st.set_page_config(page_title="CashFlow Gemini 3", layout="wide")
-st.title("⚡ CashFlow AI: Gemini 3 Flash Edition")
+# --- 3. MAIN DASHBOARD ---
+st.title("💸 CashFlow AI: Pro Collector")
 
-# --- SIDEBAR: MANUAL DATA ENTRY ---
-with st.sidebar:
-    st.header("Add Client Data")
-    with st.form("add_form"):
-        name = st.text_input("Client Name")
-        email = st.text_input("Email")
-        phone = st.text_input("Phone (e.g. 14155550123)")
-        amt = st.number_input("Amount", min_value=0.0)
-        due = st.date_input("Due Date")
-        if st.form_submit_button("Save to SaaS"):
-            data = {"client_name": name, "email": email, "phone": phone, "amount": amt, "due_date": str(due)}
-            supabase.table("invoices").insert(data).execute()
-            st.rerun()
-
-# --- MAIN DASHBOARD ---
 res = supabase.table("invoices").select("*").execute()
 df = pd.DataFrame(res.data)
 
 if not df.empty:
     for i, row in df.iterrows():
-        with st.expander(f"💼 {row['client_name']} - ${row['amount']}"):
-            c1, c2 = st.columns(2)
+        with st.expander(f"📋 {row['client_name']} - ${row['amount']}"):
+            col1, col2 = st.columns(2)
             
-            with c1:
-                # Direct SMTP Email
-                if st.button("🚀 Send Humanized Email", key=f"btn_em_{row['id']}"):
-                    with st.spinner("Gemini 3 Flash is writing..."):
-                        sent_body = send_humanized_email(row['email'], row['client_name'], row['amount'], row['due_date'])
-                        if sent_body:
-                            st.success("Humanized Email Sent!")
-                            st.info(sent_body)
+            # EMAIL SECTION with EDITING
+            with col1:
+                st.subheader("Draft Email")
+                if st.button("🪄 Generate with Gemini", key=f"gen_{row['id']}"):
+                    prompt = f"""
+                    Write a humanized payment reminder for {row['client_name']}. 
+                    Amount: ${row['amount']}. Due: {row['due_date']}.
+                    Sign off as {my_name} from {agency_name}.
+                    """
+                    draft = model.generate_content(prompt).text
+                    st.session_state[f"draft_{row['id']}"] = draft
 
-            with c2:
-                # Direct WhatsApp
-                phone_raw = str(row.get('phone', '')).replace("+", "").replace(" ", "")
-                if phone_raw:
-                    wa_msg = f"Hi {row['client_name']}, hope you're well! Just a quick follow up on that invoice."
-                    wa_link = f"https://wa.me/{phone_raw}?text={wa_msg.replace(' ', '%20')}"
-                    st.markdown(f'''<a href="{wa_link}" target="_blank"><button style="background-color:#25D366;color:white;border:none;padding:10px;border-radius:5px;width:100%">📱 Open WhatsApp Chat</button></a>''', unsafe_allow_html=True)
-                else:
-                    st.write("No phone added.")
+                # The Editable Text Area
+                current_draft = st.session_state.get(f"draft_{row['id']}", "")
+                final_email = st.text_area("Review & Edit:", value=current_draft, height=200, key=f"edit_{row['id']}")
+                
+                if st.button("📤 Approve & Send Email", key=f"send_{row['id']}"):
+                    if final_email:
+                        if send_direct_email(row['email'], "Update regarding your invoice", final_email):
+                            st.success("Email sent!")
+                    else:
+                        st.warning("Draft an email first!")
+
+            # WHATSAPP SECTION with FIX
+            with col2:
+                st.subheader("WhatsApp Reminder")
+                # Fix: Clean the phone number
+                clean_phone = str(row['phone']).replace("+", "").replace(" ", "").replace("-", "")
+                
+                wa_msg = f"Hi {row['client_name']}, just a friendly note from {my_name} at {agency_name} about the invoice for ${row['amount']} due on {row['due_date']}."
+                
+                # Fix: Proper URL Encoding to avoid 404 errors
+                encoded_msg = urllib.parse.quote(wa_msg)
+                wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
+                
+                st.markdown(f'''
+                    <a href="{wa_url}" target="_blank">
+                        <button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;">
+                            📱 Open WhatsApp Chat
+                        </button>
+                    </a>
+                ''', unsafe_allow_html=True)
 else:
-    st.info("Start by adding a client in the sidebar!")
+    st.info("No clients yet. Use the sidebar to add your first invoice.")
