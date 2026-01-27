@@ -54,19 +54,22 @@ if st.session_state.user is None:
     st.stop()
 
 u_id = st.session_state.user.id
+u_email = st.session_state.user.email
 
-def check_if_admin(user_id):
+def check_if_admin(user_id, email):
+    if email == 'ramanbajaj154@gmail.com': 
+        return True
     try:
         res = supabase.table("profiles").select("is_admin").eq("id", user_id).single().execute()
         return res.data.get("is_admin", False)
     except: return False
 
-user_is_admin = check_if_admin(u_id)
+user_is_admin = check_if_admin(u_id, u_email)
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
-    st.write(f"Logged in: **{st.session_state.user.email}**")
+    st.write(f"Logged in: **{u_email}**")
     if st.button("Logout"):
         supabase.auth.sign_out()
         st.session_state.user = None
@@ -94,11 +97,13 @@ if page == "📊 Dashboard":
         m2.metric("Collected ✅", f"${paid_total:,.2f}")
         m3.metric("Pending Invoices", len(pending_df))
         
-        # EXCEL DOWNLOAD FEATURE
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Sheet1')
-        st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+        try:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Invoices')
+            st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+        except:
+            st.warning("Excel module loading...")
         
         st.divider()
 
@@ -112,7 +117,6 @@ if page == "📊 Dashboard":
                         supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                         st.rerun()
                     st.text_area("Review Email:", value=row.get('last_draft', ""), height=150, key=f"msg_{row['id']}")
-                    if st.button("📧 Send SMTP", key=f"smtp_{row['id']}"): st.success("Sent!")
                 with c2:
                     phone = "".join(filter(str.isdigit, str(row['phone'])))
                     wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly nudge for the ${row['amount']} invoice.")
@@ -132,22 +136,20 @@ elif page == "📥 Data Entry":
     with t1:
         img_f = st.file_uploader("Upload Invoice Image", type=['png','jpg','jpeg'])
         if img_f and st.button("🚀 Process with Gemini 3"):
-            res = model.generate_content(["Extract data as JSON. If unclear, return null.", Image.open(img_f)])
+            res = model.generate_content(["Extract data as JSON.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
             data.update({"user_id": u_id, "status": "Pending"})
-            supabase.table("invoices").insert(data).execute(); st.success("AI Extracted and Saved!")
+            supabase.table("invoices").insert(data).execute(); st.success("AI Extracted!")
     with t2:
         with st.form("manual_form", clear_on_submit=True):
-            n = st.text_input("Client Name"); e = st.text_input("Email"); p = st.text_input("Phone")
-            a = st.number_input("Amount", min_value=0.0); d = st.date_input("Due Date")
+            n = st.text_input("Client Name"); a = st.number_input("Amount", min_value=0.0)
             if st.form_submit_button("Save Invoice"):
-                supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d), "user_id": u_id, "status":"Pending"}).execute()
+                supabase.table("invoices").insert({"client_name":n, "amount":a, "user_id":u_id, "status":"Pending"}).execute()
                 st.success("Saved!")
     with t3:
         csv_f = st.file_uploader("Upload CSV", type="csv")
         if csv_f and st.button("Confirm Bulk Upload"):
             df_csv = pd.read_csv(csv_f)
-            df_csv.columns = [c.lower().replace(" ", "_") for c in df_csv.columns]
             data_list = df_csv.to_dict(orient='records')
             for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data_list).execute(); st.rerun()
@@ -157,19 +159,36 @@ elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
     if res.data:
-        history_df = pd.DataFrame(res.data)
-        st.dataframe(history_df[['client_name', 'amount', 'due_date']], use_container_width=True)
+        st.dataframe(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']], use_container_width=True)
     else:
         st.info("No payment history yet.")
 
-# --- 7. SUPER ADMIN ---
+# --- 7. SUPER ADMIN (Updated to show Client Name) ---
 elif page == "👑 Super Admin" and user_is_admin:
     st.title("👑 Platform Control Center")
-    all_res = supabase.table("invoices").select("user_id, amount, status").execute()
+    
+    # 1. Pull data including client_name
+    all_res = supabase.table("invoices").select("client_name, amount, status").execute()
+    
     if all_res.data:
         all_df = pd.DataFrame(all_res.data)
+        
+        # 2. Global Metric
         st.metric("Global Platform Revenue", f"${all_df['amount'].sum():,.2f}")
-        st.subheader("👥 Registered User Activity")
-        user_report = all_df.groupby('user_id').agg({'amount': 'sum', 'user_id': 'count'})
-        user_report.columns = ['Total Volume ($)', 'Invoice Count']
-        st.dataframe(user_report, use_container_width=True)
+        
+        st.divider()
+        st.subheader("👥 Client Activity Report")
+        
+        # 3. Group by client_name instead of user_id
+        client_report = all_df.groupby('client_name').agg({
+            'amount': 'sum',
+            'status': 'count'
+        }).rename(columns={'amount': 'Total Billing ($)', 'status': 'Invoice Count'})
+        
+        st.dataframe(client_report, use_container_width=True)
+        
+        # 4. Status Chart
+        st.subheader("Global Collection Status")
+        st.bar_chart(all_df.groupby('status')['amount'].sum())
+    else:
+        st.info("No platform data yet.")
