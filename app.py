@@ -39,28 +39,35 @@ if st.session_state.user is None:
         st.title("🔐 SaaS Access")
         t1, t2 = st.tabs(["Login", "Register"])
         with t1:
-            e = st.text_input("Email")
-            p = st.text_input("Password", type="password")
+            e = st.text_input("Email", key="l_email")
+            p = st.text_input("Password", type="password", key="l_pass")
             if st.button("Sign In"):
-                res = supabase.auth.sign_in_with_password({"email": e, "password": p})
-                st.session_state.user = res.user
-                st.rerun()
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                    st.session_state.user = res.user
+                    st.rerun()
+                except Exception as err:
+                    st.error("Invalid Login. Please check your email/password or verify your account.")
         with t2:
-            re = st.text_input("New Email")
-            rp = st.text_input("New Password", type="password")
-            role_choice = st.radio("I am a:", ["Agency (Can Edit)", "Client (View Only)"])
+            re = st.text_input("New Email", key="r_email")
+            rp = st.text_input("New Password", type="password", key="r_pass")
+            role_choice = st.radio("I am a:", ["Agency (Can Edit)", "Client (View Only)"], key="role_sel")
             if st.button("Create Account"):
-                res = supabase.auth.sign_up({"email": re, "password": rp})
-                role_val = 'agency' if "Agency" in role_choice else 'client'
-                supabase.table("profiles").insert({"id": res.user.id, "role": role_val}).execute()
-                st.success("Account created! Verify email and login.")
+                try:
+                    res = supabase.auth.sign_up({"email": re, "password": rp})
+                    role_val = 'agency' if "Agency" in role_choice else 'client'
+                    # Link profile and role
+                    supabase.table("profiles").insert({"id": res.user.id, "role": role_val}).execute()
+                    st.success("Account created! You can now log in.")
+                except Exception as err:
+                    st.error(f"Registration Error: {err}")
     st.stop()
 
 # Load User Profile
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
-profile = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
-u_role = profile.data.get("role", "client") if profile.data else "client"
+profile_res = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
+u_role = profile_res.data.get("role", "client") if profile_res.data else "client"
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -71,9 +78,8 @@ with st.sidebar:
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
 
-    # Shared Sidebar Tools
-    db_admin = profile.data.get("admin_name", "Admin") if profile.data else "Admin"
-    db_agency = profile.data.get("agency_name", "My Agency") if profile.data else "My Agency"
+    db_admin = profile_res.data.get("admin_name", "Admin") if profile_res.data else "Admin"
+    db_agency = profile_res.data.get("agency_name", "My Agency") if profile_res.data else "My Agency"
     my_name = st.text_input("Your Name", value=db_admin)
     agency_name = st.text_input("Agency Name", value=db_agency)
     if st.button("💾 Save Profile"):
@@ -99,7 +105,6 @@ if u_role == 'agency':
             m2.metric("Collected ✅", f"${df[df['status']=='Paid']['amount'].sum():,.2f}")
             for i, row in df.iterrows():
                 with st.expander(f"📋 {row['client_name']} — ${row['amount']} ({row['status']})"):
-                    # Agency Action Buttons
                     if st.button("✅ Mark Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status":"Paid"}).eq("id",row['id']).execute(); st.rerun()
         else: st.info("No invoices found.")
@@ -130,7 +135,6 @@ if u_role == 'agency':
 
     elif page == "👑 Super Admin":
         st.title("👑 Platform Control Center")
-        # Global Table
         all_res = supabase.table("invoices").select("client_name, amount, status").execute()
         if all_res.data:
             st.table(pd.DataFrame(all_res.data))
@@ -138,7 +142,6 @@ if u_role == 'agency':
 # --- 5. CLIENT PAGE ---
 elif u_role == 'client':
     st.title("📋 My Invoices")
-    # Matches the invoice's email column with the user's login email
     res = supabase.table("invoices").select("*").eq("email", u_email).execute()
     if res.data:
         st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date', 'status']])
