@@ -5,29 +5,17 @@ from PIL import Image
 import pandas as pd
 import urllib.parse
 import json
+import io
 
-# --- 1. CONFIG & STYLING (Deep Dark Blue Theme) ---
+# --- 1. CONFIG & STYLING ---
 st.set_page_config(page_title="CashFlow Pro", layout="wide", page_icon="💰")
 
-# Custom CSS for SaaS UI UX
 st.markdown("""
     <style>
     .stApp { background-color: #001B33; }
     [data-testid="stMetricValue"] { font-size: 28px; color: #00D1FF; font-weight: bold; }
-    [data-testid="stMetric"] {
-        background-color: #002A4D;
-        border: 1px solid #004080;
-        padding: 20px;
-        border-radius: 15px;
-    }
-    .stButton>button {
-        border-radius: 10px;
-        background: linear-gradient(90deg, #00D1FF, #0080FF);
-        color: white;
-        font-weight: bold;
-        width: 100%;
-        border: none;
-    }
+    [data-testid="stMetric"] { background-color: #002A4D; border: 1px solid #004080; padding: 20px; border-radius: 15px; }
+    .stButton>button { border-radius: 10px; background: linear-gradient(90deg, #00D1FF, #0080FF); color: white; font-weight: bold; width: 100%; border: none; }
     .streamlit-expanderHeader { background-color: #002A4D !important; border-radius: 10px !important; color: white !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -36,13 +24,12 @@ st.markdown("""
 def init_all():
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Using specific Gemini 3 Flash Preview ID
     model = genai.GenerativeModel('gemini-3-flash-preview')
     return sb, model
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION LOGIC ---
+# --- 2. AUTHENTICATION ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -68,17 +55,15 @@ if st.session_state.user is None:
 
 u_id = st.session_state.user.id
 
-# Admin Check Function
 def check_if_admin(user_id):
     try:
         res = supabase.table("profiles").select("is_admin").eq("id", user_id).single().execute()
         return res.data.get("is_admin", False)
-    except:
-        return False
+    except: return False
 
 user_is_admin = check_if_admin(u_id)
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
     st.write(f"Logged in: **{st.session_state.user.email}**")
@@ -90,13 +75,11 @@ with st.sidebar:
     my_name = st.text_input("Your Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Agency")
     st.divider()
-    
     nav = ["📊 Dashboard", "📥 Data Entry", "📜 History"]
-    if user_is_admin:
-        nav.append("👑 Super Admin")
+    if user_is_admin: nav.append("👑 Super Admin")
     page = st.radio("Navigation", nav)
 
-# --- 4. DASHBOARD PAGE ---
+# --- 4. DASHBOARD ---
 if page == "📊 Dashboard":
     st.title("💸 Active Collections")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("is_deleted", False).execute()
@@ -110,6 +93,13 @@ if page == "📊 Dashboard":
         m1.metric("Pending ⏳", f"${pending_df['amount'].sum():,.2f}")
         m2.metric("Collected ✅", f"${paid_total:,.2f}")
         m3.metric("Pending Invoices", len(pending_df))
+        
+        # EXCEL DOWNLOAD FEATURE
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Sheet1')
+        st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+        
         st.divider()
 
         for i, row in pending_df.iterrows():
@@ -135,19 +125,17 @@ if page == "📊 Dashboard":
     else:
         st.info("No active invoices.")
 
-# --- 5. DATA ENTRY PAGE ---
+# --- 5. DATA ENTRY ---
 elif page == "📥 Data Entry":
     st.header("📥 Data Intake Hub")
     t1, t2, t3 = st.tabs(["📸 AI Image Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
-    
     with t1:
         img_f = st.file_uploader("Upload Invoice Image", type=['png','jpg','jpeg'])
         if img_f and st.button("🚀 Process with Gemini 3"):
-            res = model.generate_content(["Extract client_name, amount, due_date, email, phone as JSON. If unclear, return null.", Image.open(img_f)])
+            res = model.generate_content(["Extract data as JSON. If unclear, return null.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
             data.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data).execute(); st.success("AI Extracted and Saved!")
-
     with t2:
         with st.form("manual_form", clear_on_submit=True):
             n = st.text_input("Client Name"); e = st.text_input("Email"); p = st.text_input("Phone")
@@ -155,7 +143,6 @@ elif page == "📥 Data Entry":
             if st.form_submit_button("Save Invoice"):
                 supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d), "user_id": u_id, "status":"Pending"}).execute()
                 st.success("Saved!")
-
     with t3:
         csv_f = st.file_uploader("Upload CSV", type="csv")
         if csv_f and st.button("Confirm Bulk Upload"):
@@ -165,7 +152,7 @@ elif page == "📥 Data Entry":
             for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data_list).execute(); st.rerun()
 
-# --- 6. HISTORY PAGE ---
+# --- 6. HISTORY ---
 elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
@@ -175,24 +162,14 @@ elif page == "📜 History":
     else:
         st.info("No payment history yet.")
 
-# --- 7. SUPER ADMIN PAGE (With User Activity) ---
+# --- 7. SUPER ADMIN ---
 elif page == "👑 Super Admin" and user_is_admin:
     st.title("👑 Platform Control Center")
-    
-    # Global Stats
     all_res = supabase.table("invoices").select("user_id, amount, status").execute()
     if all_res.data:
         all_df = pd.DataFrame(all_res.data)
         st.metric("Global Platform Revenue", f"${all_df['amount'].sum():,.2f}")
-        
-        # Performance Chart
-        st.subheader("Global Status Breakdown")
-        st.bar_chart(all_df.groupby('status')['amount'].sum())
-        
-        # "Pro Polish": User Activity Report
         st.subheader("👥 Registered User Activity")
         user_report = all_df.groupby('user_id').agg({'amount': 'sum', 'user_id': 'count'})
         user_report.columns = ['Total Volume ($)', 'Invoice Count']
         st.dataframe(user_report, use_container_width=True)
-    else:
-        st.info("No platform data yet.")
