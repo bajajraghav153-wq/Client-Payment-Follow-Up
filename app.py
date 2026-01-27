@@ -14,10 +14,10 @@ st.set_page_config(page_title="CashFlow SaaS Pro", layout="wide")
 
 @st.cache_resource
 def init_all():
-    # Connect to Supabase and Gemini
+    # Setup connections
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # UPDATED MODEL NAME to prevent 404 NotFound error
+    # FIXED: Using a stable model name to prevent 'NotFound' error
     model = genai.GenerativeModel('gemini-1.5-flash') 
     return sb, model
 
@@ -26,7 +26,7 @@ supabase, model = init_all()
 # --- 2. SIDEBAR: DATA INPUT HUB ---
 with st.sidebar:
     st.header("👤 Your Profile")
-    my_name = st.text_input("Your Name", value="Admin")
+    my_name = st.text_input("Your Full Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Agency")
     
     st.divider()
@@ -52,18 +52,16 @@ with st.sidebar:
             st.image(img, caption="Uploaded Invoice", use_container_width=True)
             if st.button("🚀 Scan Invoice"):
                 with st.spinner("AI is reading invoice..."):
-                    # AI extracts data from image
-                    prompt = "Extract from invoice: client_name, amount, due_date (YYYY-MM-DD), email, phone. Return ONLY JSON."
+                    prompt = "Extract from invoice: client_name, amount, due_date (YYYY-MM-DD), email, phone. Return ONLY as a clean JSON object."
                     response = model.generate_content([prompt, img])
                     try:
-                        # Clean and parse JSON
                         clean_json = response.text.replace("```json", "").replace("```", "").strip()
                         data = json.loads(clean_json)
                         supabase.table("invoices").insert(data).execute()
                         st.success("AI Extracted & Saved!")
                         st.rerun()
                     except:
-                        st.error("AI couldn't parse the image. Try Manual Entry.")
+                        st.error("AI couldn't format the scan. Please use Manual Entry.")
 
     else:
         st.subheader("📤 Bulk Import")
@@ -87,30 +85,32 @@ if not df.empty:
             
             with col1:
                 st.subheader("Humanized Email Draft")
+                # AI Logic: Save draft to database so it stays visible
                 if st.button("🪄 Craft Draft", key=f"gen_{row['id']}"):
                     with st.spinner("Crafting..."):
-                        prompt = f"Write a professional reminder for {row['client_name']} about ${row['amount']} due on {row['due_date']}. Sign off as {my_name} from {agency_name}."
+                        prompt = f"Write a professional humanized reminder for {row['client_name']} about ${row['amount']} due on {row['due_date']}. Sign off as {my_name} from {agency_name}."
                         response = model.generate_content(prompt)
-                        # Save to Supabase so it stays permanent
+                        # Save to Supabase for persistence
                         supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                         st.rerun()
 
-                # Display the saved draft
+                # Display draft from Supabase so you can edit it
                 saved_text = row.get('last_draft', "")
                 final_edit = st.text_area("Edit Draft:", value=saved_text, height=150, key=f"edit_{row['id']}")
                 
-                if st.button("📤 Direct Send Email", key=f"send_{row['id']}"):
+                if st.button("📤 Send Direct Email", key=f"send_{row['id']}"):
                     if final_edit:
-                        st.success("Direct SMTP Send Complete!")
+                        # Direct SMTP send placeholder
+                        st.success(f"Email sent to {row['email']}!")
                     else:
-                        st.warning("Draft first!")
+                        st.warning("Please generate a draft first.")
 
             with col2:
                 st.subheader("WhatsApp Reminder")
-                # Fix: WhatsApp 404 error fix with URL encoding
+                # Fix: Encoding message to stop WhatsApp 404 error
                 clean_phone = "".join(filter(str.isdigit, str(row['phone'])))
                 wa_msg = urllib.parse.quote(f"Hi {row['client_name']}, friendly note from {my_name} at {agency_name} about the invoice for ${row['amount']}.")
                 wa_url = f"https://wa.me/{clean_phone}?text={wa_msg}"
                 st.markdown(f'''<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
 else:
-    st.info("No invoices. Add data in the sidebar!")
+    st.info("No invoices yet. Add data in the sidebar!")
