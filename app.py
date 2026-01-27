@@ -10,6 +10,7 @@ import io
 # --- 1. CONFIG & STYLING (Deep Dark Blue Theme) ---
 st.set_page_config(page_title="CashFlow Pro", layout="wide", page_icon="💰")
 
+# Deep Dark Blue Theme with Centered Header CSS
 st.markdown("""
     <style>
     .stApp { background-color: #001B33; }
@@ -28,10 +29,15 @@ st.markdown("""
         width: 100%;
         border: none;
     }
-    .streamlit-expanderHeader { background-color: #002A4D !important; border-radius: 10px !important; color: white !important; }
     
-    /* Center align table headers and content globally */
-    div[data-testid="stTable"] th { text-align: center !important; }
+    /* NEW: CSS to force header alignment to center */
+    th {
+        text-align: center !important;
+        vertical-align: middle !important;
+    }
+    [data-testid="stTable"] td {
+        text-align: center !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -71,7 +77,6 @@ if st.session_state.user is None:
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Forced Admin check for your email
 def check_if_admin(user_id, email):
     if email == 'ramanbajaj154@gmail.com': return True
     try:
@@ -170,11 +175,11 @@ elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
     if res.data:
-        st.dataframe(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']], use_container_width=True)
+        st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']]) # Using st.table for fixed styling
     else:
         st.info("No payment history yet.")
 
-# --- 7. SUPER ADMIN (Middle Aligned Columns) ---
+# --- 7. SUPER ADMIN (Header Centering Fix) ---
 elif page == "👑 Super Admin" and user_is_admin:
     st.title("👑 Platform Control Center")
     all_res = supabase.table("invoices").select("client_name, amount, status").execute()
@@ -186,28 +191,12 @@ elif page == "👑 Super Admin" and user_is_admin:
         st.divider()
         st.subheader("👥 Client Activity Report")
         
-        # Prepare Report Data
+        # Preparing the report
         client_report = all_df.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
         client_report.columns = ['Client Name', 'Total Billing ($)', 'Invoice Count']
         
-        # DISPLAY WITH MIDDLE ALIGNMENT CONFIGURATION
-        st.dataframe(
-            client_report,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Client Name": st.column_config.TextColumn("Client Name", width="medium"),
-                "Total Billing ($)": st.column_config.NumberColumn(
-                    "Total Billing ($)", 
-                    format="$%.2f",
-                    width="medium"
-                ),
-                "Invoice Count": st.column_config.NumberColumn(
-                    "Invoice Count",
-                    width="small"
-                )
-            }
-        )
+        # Displaying with forced middle alignment
+        st.table(client_report) # st.table handles alignment via CSS better than st.dataframe
         
         st.subheader("Global Collection Status")
         st.bar_chart(all_df.groupby('status')['amount'].sum())
