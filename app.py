@@ -7,16 +7,31 @@ import urllib.parse
 import json
 import io
 
-# --- 1. CONFIG & STYLING ---
+# --- 1. CONFIG & STYLING (Deep Dark Blue Theme) ---
 st.set_page_config(page_title="CashFlow Pro", layout="wide", page_icon="💰")
 
 st.markdown("""
     <style>
     .stApp { background-color: #001B33; }
     [data-testid="stMetricValue"] { font-size: 28px; color: #00D1FF; font-weight: bold; }
-    [data-testid="stMetric"] { background-color: #002A4D; border: 1px solid #004080; padding: 20px; border-radius: 15px; }
-    .stButton>button { border-radius: 10px; background: linear-gradient(90deg, #00D1FF, #0080FF); color: white; font-weight: bold; width: 100%; border: none; }
+    [data-testid="stMetric"] {
+        background-color: #002A4D;
+        border: 1px solid #004080;
+        padding: 20px;
+        border-radius: 15px;
+    }
+    .stButton>button {
+        border-radius: 10px;
+        background: linear-gradient(90deg, #00D1FF, #0080FF);
+        color: white;
+        font-weight: bold;
+        width: 100%;
+        border: none;
+    }
     .streamlit-expanderHeader { background-color: #002A4D !important; border-radius: 10px !important; color: white !important; }
+    
+    /* Center align table headers and content globally */
+    div[data-testid="stTable"] th { text-align: center !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -39,26 +54,26 @@ if st.session_state.user is None:
         st.title("🔐 SaaS Access")
         t1, t2 = st.tabs(["Login", "Register"])
         with t1:
-            e = st.text_input("Email", key="login_email")
-            p = st.text_input("Password", type="password", key="login_pass")
+            e = st.text_input("Email", key="l_e")
+            p = st.text_input("Password", type="password", key="l_p")
             if st.button("Sign In"):
                 res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                 st.session_state.user = res.user
                 st.rerun()
         with t2:
-            re = st.text_input("New Email", key="reg_email")
-            rp = st.text_input("New Password", type="password", key="reg_pass")
+            re = st.text_input("New Email", key="r_e")
+            rp = st.text_input("New Password", type="password", key="r_p")
             if st.button("Create Account"):
                 supabase.auth.sign_up({"email": re, "password": rp})
-                st.success("Registration success! Verify your email.")
+                st.success("Registration success! Verify email.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
+# Forced Admin check for your email
 def check_if_admin(user_id, email):
-    if email == 'ramanbajaj154@gmail.com': 
-        return True
+    if email == 'ramanbajaj154@gmail.com': return True
     try:
         res = supabase.table("profiles").select("is_admin").eq("id", user_id).single().execute()
         return res.data.get("is_admin", False)
@@ -71,9 +86,7 @@ with st.sidebar:
     st.title("🏦 CashFlow Ultra")
     st.write(f"Logged in: **{u_email}**")
     if st.button("Logout"):
-        supabase.auth.sign_out()
-        st.session_state.user = None
-        st.rerun()
+        supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
     my_name = st.text_input("Your Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Agency")
@@ -102,8 +115,7 @@ if page == "📊 Dashboard":
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='Invoices')
             st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
-        except:
-            st.warning("Excel module loading...")
+        except: st.warning("Excel module loading...")
         
         st.divider()
 
@@ -136,7 +148,7 @@ elif page == "📥 Data Entry":
     with t1:
         img_f = st.file_uploader("Upload Invoice Image", type=['png','jpg','jpeg'])
         if img_f and st.button("🚀 Process with Gemini 3"):
-            res = model.generate_content(["Extract data as JSON.", Image.open(img_f)])
+            res = model.generate_content(["Extract client_name, amount, due_date, email, phone as JSON.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
             data.update({"user_id": u_id, "status": "Pending"})
             supabase.table("invoices").insert(data).execute(); st.success("AI Extracted!")
@@ -144,8 +156,7 @@ elif page == "📥 Data Entry":
         with st.form("manual_form", clear_on_submit=True):
             n = st.text_input("Client Name"); a = st.number_input("Amount", min_value=0.0)
             if st.form_submit_button("Save Invoice"):
-                supabase.table("invoices").insert({"client_name":n, "amount":a, "user_id":u_id, "status":"Pending"}).execute()
-                st.success("Saved!")
+                supabase.table("invoices").insert({"client_name":n, "amount":a, "user_id":u_id, "status":"Pending"}).execute(); st.success("Saved!")
     with t3:
         csv_f = st.file_uploader("Upload CSV", type="csv")
         if csv_f and st.button("Confirm Bulk Upload"):
@@ -163,31 +174,41 @@ elif page == "📜 History":
     else:
         st.info("No payment history yet.")
 
-# --- 7. SUPER ADMIN (Updated to show Client Name) ---
+# --- 7. SUPER ADMIN (Middle Aligned Columns) ---
 elif page == "👑 Super Admin" and user_is_admin:
     st.title("👑 Platform Control Center")
-    
-    # 1. Pull data including client_name
     all_res = supabase.table("invoices").select("client_name, amount, status").execute()
     
     if all_res.data:
         all_df = pd.DataFrame(all_res.data)
-        
-        # 2. Global Metric
         st.metric("Global Platform Revenue", f"${all_df['amount'].sum():,.2f}")
         
         st.divider()
         st.subheader("👥 Client Activity Report")
         
-        # 3. Group by client_name instead of user_id
-        client_report = all_df.groupby('client_name').agg({
-            'amount': 'sum',
-            'status': 'count'
-        }).rename(columns={'amount': 'Total Billing ($)', 'status': 'Invoice Count'})
+        # Prepare Report Data
+        client_report = all_df.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
+        client_report.columns = ['Client Name', 'Total Billing ($)', 'Invoice Count']
         
-        st.dataframe(client_report, use_container_width=True)
+        # DISPLAY WITH MIDDLE ALIGNMENT CONFIGURATION
+        st.dataframe(
+            client_report,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Client Name": st.column_config.TextColumn("Client Name", width="medium"),
+                "Total Billing ($)": st.column_config.NumberColumn(
+                    "Total Billing ($)", 
+                    format="$%.2f",
+                    width="medium"
+                ),
+                "Invoice Count": st.column_config.NumberColumn(
+                    "Invoice Count",
+                    width="small"
+                )
+            }
+        )
         
-        # 4. Status Chart
         st.subheader("Global Collection Status")
         st.bar_chart(all_df.groupby('status')['amount'].sum())
     else:
