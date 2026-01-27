@@ -16,9 +16,8 @@ st.markdown("""
     [data-testid="stMetricValue"] { font-size: 28px; color: #00D1FF; font-weight: bold; }
     [data-testid="stMetric"] { background-color: #002A4D; border: 1px solid #004080; padding: 20px; border-radius: 15px; }
     .stButton>button { border-radius: 10px; background: linear-gradient(90deg, #00D1FF, #0080FF); color: white; font-weight: bold; width: 100%; border: none; }
-    
-    /* Perfect Middle Alignment for Tables */
-    th, td { text-align: center !important; vertical-align: middle !important; }
+    th, td { text-align: center !important; vertical-align: middle !important; color: white !important; }
+    .streamlit-expanderHeader { background-color: #002A4D !important; border-radius: 10px !important; color: white !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -41,24 +40,24 @@ if st.session_state.user is None:
         st.title("🔐 SaaS Access")
         t1, t2 = st.tabs(["Login", "Register"])
         with t1:
-            e = st.text_input("Email", key="l_e")
-            p = st.text_input("Password", type="password", key="l_p")
+            e = st.text_input("Email")
+            p = st.text_input("Password", type="password")
             if st.button("Sign In"):
                 res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                 st.session_state.user = res.user
                 st.rerun()
         with t2:
-            re = st.text_input("New Email", key="r_e")
-            rp = st.text_input("New Password", type="password", key="r_p")
+            re = st.text_input("New Email")
+            rp = st.text_input("New Password", type="password")
             if st.button("Create Account"):
                 supabase.auth.sign_up({"email": re, "password": rp})
-                st.success("Registration success! Verify email.")
+                st.success("Success! Check email for link.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Fetch Profile Data (Names and Admin Status)
+# Load Profile Data for Sidebar
 user_profile = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
 is_admin_user = user_profile.data.get("is_admin", False) if user_profile.data else False
 if u_email == 'ramanbajaj154@gmail.com': is_admin_user = True
@@ -71,19 +70,14 @@ with st.sidebar:
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
 
-    # Load existing names from DB or use defaults
     db_admin = user_profile.data.get("admin_name", "Admin") if user_profile.data else "Admin"
     db_agency = user_profile.data.get("agency_name", "My Agency") if user_profile.data else "My Agency"
 
     my_name = st.text_input("Your Name", value=db_admin)
     agency_name = st.text_input("Agency Name", value=db_agency)
     
-    # THE NEW SAVE BUTTON
     if st.button("💾 Save Profile"):
-        supabase.table("profiles").update({
-            "admin_name": my_name, 
-            "agency_name": agency_name
-        }).eq("id", u_id).execute()
+        supabase.table("profiles").update({"admin_name": my_name, "agency_name": agency_name}).eq("id", u_id).execute()
         st.success("Profile Saved!")
         st.rerun()
 
@@ -104,6 +98,12 @@ if page == "📊 Dashboard":
         m1.metric("Pending ⏳", f"${pending_df['amount'].sum():,.2f}")
         m2.metric("Collected ✅", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
         
+        # EXCEL DOWNLOAD
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Invoices')
+        st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+
         for i, row in pending_df.iterrows():
             with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                 c1, c2, c3 = st.columns([2, 2, 1])
@@ -125,22 +125,34 @@ if page == "📊 Dashboard":
                         supabase.table("invoices").update({"is_deleted":True}).eq("id",row['id']).execute(); st.rerun()
     else: st.info("No active invoices.")
 
-# --- 5. DATA ENTRY ---
+# --- 5. DATA ENTRY (RESTORED ALL METHODS) ---
 elif page == "📥 Data Entry":
     st.header("📥 Data Intake Hub")
-    t1, t2 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry"])
+    t1, t2, t3 = st.tabs(["📸 AI Image Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
+    
     with t1:
-        img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
-        if img_f and st.button("🚀 Process"):
+        img_f = st.file_uploader("Upload Invoice Image", type=['png','jpg','jpeg'])
+        if img_f and st.button("🚀 Process with Gemini 3"):
             res = model.generate_content(["Extract data as JSON.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
             data.update({"user_id": u_id, "status": "Pending"})
-            supabase.table("invoices").insert(data).execute(); st.success("Saved!")
+            supabase.table("invoices").insert(data).execute(); st.success("AI Extracted and Saved!")
+
     with t2:
-        with st.form("manual_form"):
-            n = st.text_input("Name"); a = st.number_input("Amount")
+        with st.form("manual_form", clear_on_submit=True):
+            n = st.text_input("Client Name"); e = st.text_input("Email"); p = st.text_input("Phone")
+            a = st.number_input("Amount", min_value=0.0); d = st.date_input("Due Date")
             if st.form_submit_button("Save Invoice"):
-                supabase.table("invoices").insert({"client_name":n, "amount":a, "user_id":u_id, "status":"Pending"}).execute(); st.success("Saved!")
+                supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d), "user_id": u_id, "status":"Pending"}).execute()
+                st.success("Saved!")
+
+    with t3:
+        csv_f = st.file_uploader("Upload CSV", type="csv")
+        if csv_f and st.button("Confirm Bulk Upload"):
+            df_csv = pd.read_csv(csv_f)
+            data_list = df_csv.to_dict(orient='records')
+            for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
+            supabase.table("invoices").insert(data_list).execute(); st.rerun()
 
 # --- 6. HISTORY ---
 elif page == "📜 History":
@@ -160,4 +172,4 @@ elif page == "👑 Super Admin" and is_admin_user:
         st.subheader("👥 Client Activity Report")
         report = all_df.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
         report.columns = ['Client Name', 'Total Billing ($)', 'Invoice Count']
-        st.table(report) # Static table for perfect middle alignment
+        st.table(report) # Perfect middle alignment
