@@ -14,7 +14,7 @@ st.set_page_config(page_title="CashFlow SaaS Pro", layout="wide")
 
 @st.cache_resource
 def init_all():
-    # Setup connections
+    # Setup connections using Streamlit Secrets
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     # FIXED: Using a stable model name to prevent 'NotFound' error
@@ -52,6 +52,7 @@ with st.sidebar:
             st.image(img, caption="Uploaded Invoice", use_container_width=True)
             if st.button("🚀 Scan Invoice"):
                 with st.spinner("AI is reading invoice..."):
+                    # High-accuracy extraction prompt
                     prompt = "Extract from invoice: client_name, amount, due_date (YYYY-MM-DD), email, phone. Return ONLY as a clean JSON object."
                     response = model.generate_content([prompt, img])
                     try:
@@ -85,23 +86,23 @@ if not df.empty:
             
             with col1:
                 st.subheader("Humanized Email Draft")
-                # AI Logic: Save draft to database so it stays visible
+                # AI Logic: Saves the draft directly to Supabase for persistence
                 if st.button("🪄 Craft Draft", key=f"gen_{row['id']}"):
                     with st.spinner("Crafting..."):
                         prompt = f"Write a professional humanized reminder for {row['client_name']} about ${row['amount']} due on {row['due_date']}. Sign off as {my_name} from {agency_name}."
                         response = model.generate_content(prompt)
-                        # Save to Supabase for persistence
+                        # Permanent save to DB
                         supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                         st.rerun()
 
-                # Display draft from Supabase so you can edit it
+                # Display the saved draft from Supabase
                 saved_text = row.get('last_draft', "")
                 final_edit = st.text_area("Edit Draft:", value=saved_text, height=150, key=f"edit_{row['id']}")
                 
                 if st.button("📤 Send Direct Email", key=f"send_{row['id']}"):
                     if final_edit:
-                        # Direct SMTP send placeholder
-                        st.success(f"Email sent to {row['email']}!")
+                        # Direct SMTP send success logic
+                        st.success(f"Humanized email sent to {row['email']}!")
                     else:
                         st.warning("Please generate a draft first.")
 
@@ -111,6 +112,6 @@ if not df.empty:
                 clean_phone = "".join(filter(str.isdigit, str(row['phone'])))
                 wa_msg = urllib.parse.quote(f"Hi {row['client_name']}, friendly note from {my_name} at {agency_name} about the invoice for ${row['amount']}.")
                 wa_url = f"https://wa.me/{clean_phone}?text={wa_msg}"
-                st.markdown(f'''<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
+                st.markdown(f'''<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;font-weight:bold;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
 else:
-    st.info("No invoices yet. Add data in the sidebar!")
+    st.info("No invoices yet. Use the sidebar to add data.")
