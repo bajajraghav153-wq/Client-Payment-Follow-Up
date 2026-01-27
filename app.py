@@ -5,34 +5,38 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import pandas as pd
 import google.generativeai as genai
-import urllib.parse # For fixing the WhatsApp 404 error
+import urllib.parse # Required for fixing WhatsApp link formatting
 
 # --- 1. SETUP & PROFILE ---
 st.set_page_config(page_title="CashFlow Gemini 3 Pro", layout="wide")
 
 @st.cache_resource
 def init_all():
-    sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-    return sb, model
+    try:
+        sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        # UPDATED MODEL NAME TO PREVENT 404 NOT FOUND ERROR
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        return sb, model
+    except Exception as e:
+        st.error(f"Initialization Failed: {e}")
+        return None, None
 
 supabase, model = init_all()
 
-# Sidebar: User/Agency Profile
+# Sidebar: Your Agency Details
 with st.sidebar:
     st.header("🏢 Your Agency Profile")
-    my_name = st.text_input("Your Name", value="Admin")
+    my_name = st.text_input("Your Full Name", value="Admin")
     agency_name = st.text_input("Agency Name", value="My Boutique Agency")
     st.divider()
     
-    # Existing Add Client Form
     st.header("➕ Add New Client")
     with st.form("add_client"):
         c_name = st.text_input("Client Name")
         c_email = st.text_input("Email")
-        # Tip: Remind users to use country code for WhatsApp
-        c_phone = st.text_input("Phone (Country Code first, e.g. 919876543210)")
+        # IMPORTANT: WhatsApp requires country code, no + or spaces (e.g., 919876543210)
+        c_phone = st.text_input("Phone (Country Code first)")
         c_amt = st.number_input("Amount ($)", min_value=0.0)
         c_due = st.date_input("Due Date")
         if st.form_submit_button("Save to SaaS"):
@@ -59,7 +63,7 @@ def send_direct_email(to_email, subject, body):
         server.quit()
         return True
     except Exception as e:
-        st.error(f"Failed to send: {e}")
+        st.error(f"Email Error: {e}")
         return False
 
 # --- 3. MAIN DASHBOARD ---
@@ -73,45 +77,47 @@ if not df.empty:
         with st.expander(f"📋 {row['client_name']} - ${row['amount']}"):
             col1, col2 = st.columns(2)
             
-            # EMAIL SECTION with EDITING
+            # --- EMAIL SECTION: GENERATE -> EDIT -> SEND ---
             with col1:
-                st.subheader("Draft Email")
-                if st.button("🪄 Generate with Gemini", key=f"gen_{row['id']}"):
+                st.subheader("Humanized Email Draft")
+                if st.button("🪄 Craft with Gemini 3", key=f"gen_{row['id']}"):
                     prompt = f"""
-                    Write a humanized payment reminder for {row['client_name']}. 
+                    Write a professional, warm email reminder to {row['client_name']}. 
                     Amount: ${row['amount']}. Due: {row['due_date']}.
-                    Sign off as {my_name} from {agency_name}.
+                    Ensure it sounds 100% human. Sign off as {my_name} from {agency_name}.
                     """
+                    # Gemini 3 Flash generates the draft
                     draft = model.generate_content(prompt).text
                     st.session_state[f"draft_{row['id']}"] = draft
 
-                # The Editable Text Area
+                # MANUAL EDITING AREA: Review and change the text before sending
                 current_draft = st.session_state.get(f"draft_{row['id']}", "")
-                final_email = st.text_area("Review & Edit:", value=current_draft, height=200, key=f"edit_{row['id']}")
+                final_email = st.text_area("Review & Edit Draft:", value=current_draft, height=200, key=f"edit_{row['id']}")
                 
-                if st.button("📤 Approve & Send Email", key=f"send_{row['id']}"):
+                if st.button("📤 Final Approve & Send", key=f"send_{row['id']}"):
                     if final_email:
-                        if send_direct_email(row['email'], "Update regarding your invoice", final_email):
-                            st.success("Email sent!")
+                        with st.spinner("Sending via SMTP..."):
+                            if send_direct_email(row['email'], "Quick update regarding our latest invoice", final_email):
+                                st.success("Email sent successfully!")
                     else:
-                        st.warning("Draft an email first!")
+                        st.warning("Please generate a draft first.")
 
-            # WHATSAPP SECTION with FIX
+            # --- WHATSAPP SECTION: FIXED LINK FORMAT ---
             with col2:
-                st.subheader("WhatsApp Reminder")
-                # Fix: Clean the phone number
+                st.subheader("WhatsApp Follow-up")
+                # Cleaning the phone number: Remove +, spaces, and dashes
                 clean_phone = str(row['phone']).replace("+", "").replace(" ", "").replace("-", "")
                 
-                wa_msg = f"Hi {row['client_name']}, just a friendly note from {my_name} at {agency_name} about the invoice for ${row['amount']} due on {row['due_date']}."
+                wa_msg = f"Hi {row['client_name']}, friendly note from {my_name} at {agency_name} about the invoice for ${row['amount']} due on {row['due_date']}."
                 
-                # Fix: Proper URL Encoding to avoid 404 errors
+                # URLEncode the message to fix the WhatsApp 404 error
                 encoded_msg = urllib.parse.quote(wa_msg)
                 wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
                 
                 st.markdown(f'''
                     <a href="{wa_url}" target="_blank">
-                        <button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;">
-                            📱 Open WhatsApp Chat
+                        <button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;font-weight:bold;">
+                            📱 Open Direct WhatsApp Chat
                         </button>
                     </a>
                 ''', unsafe_allow_html=True)
