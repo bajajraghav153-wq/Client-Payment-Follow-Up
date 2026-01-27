@@ -5,3 +5,5 @@ plotly
 google-generativeai
 fpdf
 pillow
+xlsxwriter
+
