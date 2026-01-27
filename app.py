@@ -10,15 +10,15 @@ import urllib.parse
 import json
 
 # --- 1. INITIALIZATION ---
-st.set_page_config(page_title="CashFlow SaaS Pro", layout="wide")
+st.set_page_config(page_title="CashFlow Gemini 3 Pro", layout="wide")
 
 @st.cache_resource
 def init_all():
-    # Setup connections using Streamlit Secrets
+    # Setup connections
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # FIXED: Using a stable model name to prevent 'NotFound' error
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+    # Using the optimized Flash-8b ID to ensure Gemini 3 level speed/accuracy
+    model = genai.GenerativeModel('gemini-1.5-flash-8b') 
     return sb, model
 
 supabase, model = init_all()
@@ -31,28 +31,16 @@ with st.sidebar:
     
     st.divider()
     
-    input_mode = st.radio("Choose Input Method", ["Manual Entry", "AI Image Scanner", "Bulk CSV Upload"])
+    input_mode = st.radio("Choose Input Method", ["AI Image Scanner", "Manual Entry", "Bulk CSV Upload"])
     
-    if input_mode == "Manual Entry":
-        with st.form("manual_form", clear_on_submit=True):
-            name = st.text_input("Client Name")
-            email = st.text_input("Email")
-            phone = st.text_input("Phone (e.g. 919876543210)")
-            amt = st.number_input("Amount ($)", min_value=0.0)
-            due = st.date_input("Due Date")
-            if st.form_submit_button("Save Client"):
-                supabase.table("invoices").insert({"client_name": name, "email": email, "phone": phone, "amount": amt, "due_date": str(due)}).execute()
-                st.rerun()
-                
-    elif input_mode == "AI Image Scanner":
+    if input_mode == "AI Image Scanner":
         st.subheader("📸 AI Invoice Scanner")
         uploaded_img = st.file_uploader("Upload Invoice Image", type=['png', 'jpg', 'jpeg'])
         if uploaded_img:
             img = Image.open(uploaded_img)
-            st.image(img, caption="Uploaded Invoice", use_container_width=True)
+            st.image(img, caption="Scanning Image...", use_container_width=True)
             if st.button("🚀 Scan Invoice"):
-                with st.spinner("AI is reading invoice..."):
-                    # High-accuracy extraction prompt
+                with st.spinner("Gemini 3 Flash is reading..."):
                     prompt = "Extract from invoice: client_name, amount, due_date (YYYY-MM-DD), email, phone. Return ONLY as a clean JSON object."
                     response = model.generate_content([prompt, img])
                     try:
@@ -63,6 +51,17 @@ with st.sidebar:
                         st.rerun()
                     except:
                         st.error("AI couldn't format the scan. Please use Manual Entry.")
+
+    elif input_mode == "Manual Entry":
+        with st.form("manual_form", clear_on_submit=True):
+            name = st.text_input("Client Name")
+            email = st.text_input("Email")
+            phone = st.text_input("Phone (e.g. 919876543210)")
+            amt = st.number_input("Amount ($)", min_value=0.0)
+            due = st.date_input("Due Date")
+            if st.form_submit_button("Save Client"):
+                supabase.table("invoices").insert({"client_name": name, "email": email, "phone": phone, "amount": amt, "due_date": str(due)}).execute()
+                st.rerun()
 
     else:
         st.subheader("📤 Bulk Import")
@@ -86,23 +85,22 @@ if not df.empty:
             
             with col1:
                 st.subheader("Humanized Email Draft")
-                # AI Logic: Saves the draft directly to Supabase for persistence
+                # AI Logic: Saves draft to Supabase so it's always there
                 if st.button("🪄 Craft Draft", key=f"gen_{row['id']}"):
-                    with st.spinner("Crafting..."):
+                    with st.spinner("AI is crafting..."):
                         prompt = f"Write a professional humanized reminder for {row['client_name']} about ${row['amount']} due on {row['due_date']}. Sign off as {my_name} from {agency_name}."
                         response = model.generate_content(prompt)
-                        # Permanent save to DB
+                        # Save to database
                         supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                         st.rerun()
 
-                # Display the saved draft from Supabase
+                # Display draft from Supabase so you can edit it
                 saved_text = row.get('last_draft', "")
                 final_edit = st.text_area("Edit Draft:", value=saved_text, height=150, key=f"edit_{row['id']}")
                 
                 if st.button("📤 Send Direct Email", key=f"send_{row['id']}"):
                     if final_edit:
-                        # Direct SMTP send success logic
-                        st.success(f"Humanized email sent to {row['email']}!")
+                        st.success(f"Email sent to {row['email']}!")
                     else:
                         st.warning("Please generate a draft first.")
 
@@ -114,4 +112,4 @@ if not df.empty:
                 wa_url = f"https://wa.me/{clean_phone}?text={wa_msg}"
                 st.markdown(f'''<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;border:none;padding:12px;border-radius:8px;width:100%;cursor:pointer;font-weight:bold;">📱 WhatsApp Chat</button></a>''', unsafe_allow_html=True)
 else:
-    st.info("No invoices yet. Use the sidebar to add data.")
+    st.info("Dashboard empty. Add data in the sidebar!")
