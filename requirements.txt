@@ -1,3 +1,7 @@
 streamlit
 supabase
 pandas
+plotly
+google-generativeai
+fpdf
+pillow
