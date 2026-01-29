@@ -47,64 +47,48 @@ if st.session_state.user is None:
                     res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                     st.session_state.user = res.user
                     st.rerun()
-                except Exception as err:
-                    st.error(f"Auth Error: {str(err)}")
+                except: st.error("Login Failed.")
         with t2:
             re = st.text_input("New Email", key="r_email")
             rp = st.text_input("New Password", type="password", key="r_pass")
             role_sel = st.radio("Join as:", ["Agency (Manager)", "Client (Viewer)"], key="role_sel")
             if st.button("Create Account"):
-                try:
-                    res = supabase.auth.sign_up({"email": re, "password": rp})
-                    role_val = 'agency' if "Agency" in role_sel else 'client'
-                    # Create profile immediately
-                    supabase.table("profiles").insert({"id": res.user.id, "role": role_val}).execute()
-                    st.success("Account created! Verify your email and login.")
-                except Exception as err:
-                    st.error(f"Reg Error: {str(err)}")
+                res = supabase.auth.sign_up({"email": re, "password": rp})
+                role_val = 'agency' if "Agency" in role_sel else 'client'
+                supabase.table("profiles").insert({"id": res.user.id, "role": role_val}).execute()
+                st.success("Account created! Verify your email then login.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
 # --- 3. ROLE DETECTION ---
-try:
-    prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
-    u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
-    is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
-except:
-    u_role = "client"
-    is_admin = False
-
-# Forced Admin for Master Account
-if u_email == 'ramanbajaj154@gmail.com':
-    u_role = 'agency'
-    is_admin = True
+prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
+u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
+is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
-    st.write(f"Logged in: **{u_email}**")
+    st.write(f"Logged in: **{u_email}** | Role: **{u_role.upper()}**")
     if st.button("Logout"):
-        supabase.auth.sign_out()
-        st.session_state.user = None
-        st.rerun()
+        supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
 
-    db_admin = prof_res.data.get("admin_name", "Admin") if prof_res.data and prof_res.data.get("admin_name") else "Admin"
-    db_agency = prof_res.data.get("agency_name", "My Agency") if prof_res.data and prof_res.data.get("agency_name") else "My Agency"
+    db_admin = prof_res.data.get("admin_name", "Admin") if prof_res.data else "Admin"
+    db_agency = prof_res.data.get("agency_name", "My Agency") if prof_res.data else "My Agency"
     my_name = st.text_input("Your Name", value=db_admin)
     agency_name = st.text_input("Agency Name", value=db_agency)
     
     if st.button("💾 Save Profile Settings"):
         supabase.table("profiles").update({"admin_name": my_name, "agency_name": agency_name}).eq("id", u_id).execute()
-        st.success("Saved!"); st.rerun()
+        st.success("Profile Updated!"); st.rerun()
 
     st.divider()
     if u_role == 'agency':
         nav = ["📊 Dashboard", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
-        nav = ["📋 My Payments"]
+        nav = ["📋 My Invoices"]
     page = st.radio("Navigation", nav)
 
 # --- 5. AGENCY LOGIC ---
@@ -122,33 +106,33 @@ if u_role == 'agency':
             for i, row in pending.iterrows():
                 with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                     c1, c2 = st.columns(2)
-                    if c1.button("✅ Mark Paid", key=f"p_{row['id']}"):
+                    if c1.button("✅ Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
                     if c2.button("🗑️ Delete", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
         else: st.info("No active invoices.")
 
     elif page == "📥 Data Entry":
-        st.header("📥 Multi-Channel Data Entry")
+        st.header("📥 Multi-Channel Data Intake")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
         
         with t1:
-            img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
+            img_f = st.file_uploader("Upload Invoice", type=['png','jpg','jpeg'])
             if img_f and st.button("🚀 Process with Gemini 3"):
                 ai_res = model.generate_content(["Extract client_name, email, amount as JSON.", Image.open(img_f)])
                 data = json.loads(ai_res.text.replace("```json","").replace("```",""))
-                data.update({"user_id": u_id})
+                data.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(data).execute(); st.success("AI Imported!")
 
         with t2:
-            with st.form("man_entry"):
+            with st.form("man_entry", clear_on_submit=True):
                 cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); ca = st.number_input("Amount ($)")
-                if st.form_submit_button("Save to Database"):
+                if st.form_submit_button("Save Invoice"):
                     supabase.table("invoices").insert({"client_name": cn, "email": ce, "amount": ca, "user_id": u_id}).execute()
-                    st.success("Manual Entry Saved!"); st.rerun()
+                    st.success("Entry Saved!"); st.rerun()
 
         with t3:
-            csv_f = st.file_uploader("Select CSV", type="csv")
+            csv_f = st.file_uploader("Upload CSV", type="csv")
             if csv_f and st.button("Confirm Bulk Upload"):
                 csv_df = pd.read_csv(csv_f)
                 recs = csv_df.to_dict(orient='records')
@@ -156,7 +140,7 @@ if u_role == 'agency':
                 supabase.table("invoices").insert(recs).execute(); st.success("CSV Imported!"); st.rerun()
 
     elif page == "👑 Super Admin" and is_admin:
-        st.title("👑 Super Admin Intelligence")
+        st.title("👑 Platform Analytics")
         all_res = supabase.table("invoices").select("client_name, amount, status").execute()
         if all_res.data:
             df_all = pd.DataFrame(all_res.data)
@@ -170,4 +154,4 @@ else:
     res = supabase.table("invoices").select("*").eq("email", u_email).execute()
     if res.data:
         st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
-    else: st.info("No invoices found for your email address.")
+    else: st.info("No invoices shared with your email yet.")
