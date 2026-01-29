@@ -9,7 +9,7 @@ import io
 from datetime import date
 
 # --- 1. UI & THEME ---
-st.set_page_config(page_title="CashFlow Pro Advanced", layout="wide", page_icon="💰")
+st.set_page_config(page_title="CashFlow Pro Pro", layout="wide", page_icon="💰")
 
 st.markdown("""
     <style>
@@ -82,7 +82,7 @@ with st.sidebar:
     if is_admin: nav.append("👑 Super Admin")
     page = st.radio("Navigation", nav)
 
-# --- 5. DASHBOARD (ADVANCED VISUALS) ---
+# --- 5. DASHBOARD (OUTREACH & PAYMENTS) ---
 if page == "📊 Dashboard":
     st.title("💸 Active Collections")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("is_deleted", False).execute()
@@ -90,13 +90,11 @@ if page == "📊 Dashboard":
     
     if not df.empty:
         pending_df = df[df['status'] == 'Pending']
-        m1, m2, m3 = st.columns(3)
+        m1, m2 = st.columns(2)
         m1.metric("Pending ⏳", f"${pending_df['amount'].sum():,.2f}")
         m2.metric("Collected ✅", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
-        m3.metric("Total Files", len(df))
         
         for i, row in pending_df.iterrows():
-            # Overdue Logic
             due_date_raw = row.get('due_date')
             overdue_tag = ""
             if due_date_raw and date.fromisoformat(due_date_raw) < date.today():
@@ -106,82 +104,54 @@ if page == "📊 Dashboard":
                 c1, c2, c3 = st.columns([2, 2, 1])
                 with c1:
                     if st.button("🪄 Craft Draft", key=f"ai_{row['id']}"):
-                        prompt = f"Professional payment reminder for {row['client_name']} about ${row['amount']}. From {my_name}."
+                        pay_link = row.get('payment_link', 'our payment portal')
+                        prompt = f"Write a reminder for {row['client_name']} regarding ${row['amount']}. Include this payment link: {pay_link}. From {my_name}."
                         ai_msg = model.generate_content(prompt).text
                         supabase.table("invoices").update({"last_draft": ai_msg}).eq("id", row['id']).execute(); st.rerun()
                     st.text_area("Draft:", value=row.get('last_draft', ""), height=120, key=f"t_{row['id']}")
                 with c2:
+                    st.write("**Direct Outreach**")
                     if row.get('phone'):
                         p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                        wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for ${row['amount']}."
+                        wa_msg = f"Hi {row['client_name']}, friendly nudge for the ${row['amount']} invoice. You can pay here: {row.get('payment_link', '')}"
+                        wa_url = f"https://wa.me/{p_clean}?text={urllib.parse.quote(wa_msg)}"
                         st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                 with c3:
                     if st.button("✅ Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-                    if st.button("🗑️ Del", key=f"d_{row['id']}"):
-                        supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
     else: st.info("No active invoices.")
 
-# --- 6. DATA ENTRY (WITH PREVIEWS) ---
+# --- 6. DATA ENTRY (PAYMENT LINK ADDED) ---
 elif page == "📥 Data Entry":
     st.header("📥 Multi-Channel Data Intake")
-    t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
-    with t1:
-        img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
-        if img_f and st.button("🚀 AI Process"):
-            res = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img_f)])
-            data = json.loads(res.text.replace("```json","").replace("```",""))
-            data.update({"user_id": u_id, "status": "Pending"})
-            supabase.table("invoices").insert(data).execute(); st.success("AI Extracted!"); st.rerun()
+    t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV"])
     with t2:
         with st.form("manual_entry_form", clear_on_submit=True):
             cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); cp = st.text_input("Phone Number")
             ca = st.number_input("Amount ($)", min_value=0.0); cd = st.date_input("Due Date")
+            pl = st.text_input("Stripe/Payment Link (Optional)") # New payment link field
             if st.form_submit_button("💾 Save Invoice"):
-                supabase.table("invoices").insert({"client_name": cn, "email": ce, "phone": cp, "amount": ca, "due_date": str(cd), "user_id": u_id, "status": "Pending"}).execute()
+                supabase.table("invoices").insert({
+                    "client_name": cn, "email": ce, "phone": cp, "amount": ca, 
+                    "due_date": str(cd), "user_id": u_id, "status": "Pending", "payment_link": pl
+                }).execute()
                 st.success("Invoice Saved!"); st.rerun()
     with t3:
-        st.subheader("Bulk Import with Safety Preview")
         csv_f = st.file_uploader("Select CSV File", type="csv")
         if csv_f:
             df_preview = pd.read_csv(csv_f)
-            st.write("🔍 **Data Preview (Top 5 Rows):**")
-            st.dataframe(df_preview.head()) # Data preview
-            if st.button("🚀 Confirm and Upload Records"):
+            st.dataframe(df_preview.head())
+            if st.button("🚀 Upload Records"):
                 recs = df_preview.to_dict(orient='records')
                 for r in recs: r.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(recs).execute(); st.success("Bulk Upload Complete!"); st.rerun()
 
-# --- 7. HISTORY ---
-elif page == "📜 History":
-    st.header("📜 Completed Transactions")
-    res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
-    if res.data: st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date', 'status']])
-    else: st.info("No payment history found yet.")
-
-# --- 8. SUPER ADMIN (ADVANCED ANALYTICS) ---
+# --- 7. SUPER ADMIN ---
 elif page == "👑 Super Admin" and is_admin:
-    st.title("👑 Platform Intelligence")
+    st.title("👑 Platform Analytics")
     all_res = supabase.table("invoices").select("*").execute()
     if all_res.data:
         df_all = pd.DataFrame(all_res.data)
-        
-        # Financial KPIs
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Global Revenue", f"${df_all['amount'].sum():,.2f}")
-        col_m2.metric("Total Invoices", len(df_all))
-        paid_rate = (len(df_all[df_all['status']=='Paid']) / len(df_all)) * 100 if len(df_all) > 0 else 0
-        col_m3.metric("Platform Collection Rate", f"{paid_rate:.1f}%")
-        
-        st.divider()
-        
-        # Revenue Distribution Chart
-        st.subheader("💰 Revenue by Client")
-        revenue_chart = df_all.groupby('client_name')['amount'].sum().sort_values(ascending=False)
-        st.bar_chart(revenue_chart) # Financial chart
-
-        st.subheader("👥 Detailed Client Activity")
-        report = df_all.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
-        report.columns = ['Client Name', 'Total Volume ($)', 'Invoices']
-        st.table(report) # Static table for alignment
-    else: st.info("No platform data yet.")
+        st.metric("Global Revenue", f"${df_all['amount'].sum():,.2f}")
+        st.bar_chart(df_all.groupby('client_name')['amount'].sum())
+        st.table(df_all.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}))
