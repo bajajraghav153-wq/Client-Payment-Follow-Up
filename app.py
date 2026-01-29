@@ -40,14 +40,14 @@ if st.session_state.user is None:
         st.title("🔐 SaaS Gateway")
         t1, t2 = st.tabs(["Login", "Register"])
         with t1:
-            e = st.text_input("Email", key="l_email")
-            p = st.text_input("Password", type="password", key="l_pass")
+            e = st.text_input("Email")
+            p = st.text_input("Password", type="password")
             if st.button("Sign In"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                     st.session_state.user = res.user
                     st.rerun()
-                except: st.error("Login Failed.")
+                except: st.error("Authentication Failed.")
     st.stop()
 
 u_id = st.session_state.user.id
@@ -58,7 +58,7 @@ prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execut
 u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
 is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-# Master Override
+# Master Override for Raghav
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 
@@ -101,41 +101,67 @@ if u_role == 'agency':
             for i, row in pending.iterrows():
                 with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                     c1, c2 = st.columns(2)
-                    if c1.button("✅ Paid", key=f"p_{row['id']}"):
+                    if c1.button("✅ Mark Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
                     if c2.button("🗑️ Delete", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
-        else: st.info("No active invoices.")
+        else: st.info("No active invoices found.")
 
     elif page == "📥 Data Entry":
-        st.header("📥 Data Intake")
-        t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV"])
+        st.header("📥 Multi-Channel Data Entry")
+        t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
+        
+        with t1:
+            st.subheader("AI Invoice Processor")
+            img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'], key="ai_upload")
+            if img_f and st.button("🚀 Process with Gemini 3"):
+                ai_res = model.generate_content(["Extract client_name, email, amount as JSON.", Image.open(img_f)])
+                data = json.loads(ai_res.text.replace("```json","").replace("```",""))
+                data.update({"user_id": u_id, "status": "Pending"})
+                supabase.table("invoices").insert(data).execute()
+                st.success("AI Extracted and Saved!"); st.rerun()
+
         with t2:
-            with st.form("man_entry", clear_on_submit=True):
-                cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); ca = st.number_input("Amount ($)")
-                if st.form_submit_button("Save"):
-                    supabase.table("invoices").insert({"client_name": cn, "email": ce, "amount": ca, "user_id": u_id}).execute()
-                    st.success("Saved!"); st.rerun()
-        # ... (AI and CSV tabs remain same as previous version)
+            st.subheader("Manual Invoice Entry")
+            with st.form("manual_entry_form", clear_on_submit=True):
+                client_n = st.text_input("Client Name")
+                client_e = st.text_input("Client Email")
+                inv_amt = st.number_input("Amount ($)", min_value=0.0)
+                if st.form_submit_button("💾 Save Invoice"):
+                    supabase.table("invoices").insert({
+                        "client_name": client_n,
+                        "email": client_e,
+                        "amount": inv_amt,
+                        "user_id": u_id,
+                        "status": "Pending"
+                    }).execute()
+                    st.success("Invoice Saved!"); st.rerun()
+
+        with t3:
+            st.subheader("Bulk CSV Import")
+            csv_f = st.file_uploader("Select CSV File", type="csv", key="csv_upload")
+            if csv_f and st.button("Confirm Bulk Upload"):
+                csv_df = pd.read_csv(csv_f)
+                recs = csv_df.to_dict(orient='records')
+                for r in recs: r.update({"user_id": u_id, "status": "Pending"})
+                supabase.table("invoices").insert(recs).execute()
+                st.success(f"Successfully imported {len(recs)} invoices!"); st.rerun()
 
     elif page == "📜 History":
         st.header("📜 Completed Transactions")
-        # History pulls specifically PAID invoices
         res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
         if res.data:
-            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date', 'status']])
-        else: st.info("No payment history found yet.")
+            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
+        else: st.info("No payment history found.")
 
     elif page == "👑 Super Admin" and is_admin:
         st.title("👑 Platform Analytics")
-        # Super Admin pulls EVERYTHING across all users
         all_res = supabase.table("invoices").select("*").execute()
         if all_res.data:
             df_all = pd.DataFrame(all_res.data)
             report = df_all.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
             report.columns = ['Client Name', 'Total Volume ($)', 'Invoices']
             st.table(report)
-        else: st.info("No platform data available.")
 
 # --- 6. CLIENT LOGIC ---
 else:
@@ -143,4 +169,4 @@ else:
     res = supabase.table("invoices").select("*").eq("email", u_email).execute()
     if res.data:
         st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
-    else: st.info("No invoices found for your email.")
+    else: st.info("No invoices found for your email address.")
