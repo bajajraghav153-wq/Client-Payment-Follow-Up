@@ -25,7 +25,6 @@ st.markdown("""
 def init_all():
     sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Using the specific model intended for preview/flash
     model = genai.GenerativeModel('gemini-3-flash-preview')
     return sb, model
 
@@ -39,14 +38,14 @@ if st.session_state.user is None:
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.title("🔐 SaaS Gateway")
-        e = st.text_input("Email", key="login_email")
-        p = st.text_input("Password", type="password", key="login_pass")
+        e = st.text_input("Email", key="l_email")
+        p = st.text_input("Password", type="password", key="l_pass")
         if st.button("Sign In"):
             try:
                 res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                 st.session_state.user = res.user
                 st.rerun()
-            except: st.error("Login Failed. Please check your credentials.")
+            except: st.error("Login Failed.")
     st.stop()
 
 u_id = st.session_state.user.id
@@ -82,7 +81,7 @@ with st.sidebar:
     if is_admin: nav.append("👑 Super Admin")
     page = st.radio("Navigation", nav)
 
-# --- 5. DASHBOARD (FIXED AI DRAFTING) ---
+# --- 5. DASHBOARD (OUTREACH RESTORED) ---
 if page == "📊 Dashboard":
     st.title("💸 Active Collections")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("is_deleted", False).execute()
@@ -98,27 +97,22 @@ if page == "📊 Dashboard":
             with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                 c1, c2, c3 = st.columns([2, 2, 1])
                 
+                # Column 1: AI Email Outreach
                 with c1:
-                    # Logic Fix: Ensuring the AI response is cleaned of markdown codes
-                    if st.button("🪄 Craft AI Draft", key=f"ai_btn_{row['id']}"):
-                        try:
-                            prompt = f"Professional, friendly payment reminder for {row['client_name']} about their ${row['amount']} invoice. From {my_name} at {agency_name}. Keep it under 100 words."
-                            ai_response = model.generate_content(prompt)
-                            draft_text = ai_response.text.strip()
-                            # Update DB immediately
-                            supabase.table("invoices").update({"last_draft": draft_text}).eq("id", row['id']).execute()
-                            st.success("Draft Generated!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"AI Error: {str(e)}")
+                    if st.button("🪄 Craft Draft", key=f"ai_{row['id']}"):
+                        prompt = f"Write a short, professional payment reminder for {row['client_name']} regarding their ${row['amount']} invoice. From {my_name} at {agency_name}."
+                        ai_response = model.generate_content(prompt)
+                        supabase.table("invoices").update({"last_draft": ai_response.text}).eq("id", row['id']).execute()
+                        st.rerun()
                     
-                    st.text_area("Email/Message Draft:", value=row.get('last_draft', ""), height=150, key=f"draft_area_{row['id']}")
+                    st.text_area("Email Draft:", value=row.get('last_draft', ""), height=150, key=f"txt_{row['id']}")
                 
+                # Column 2: WhatsApp Outreach
                 with c2:
-                    st.write("**Direct Outreach**")
+                    st.write("**Direct Action**")
                     if row.get('phone'):
                         p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                        wa_msg = f"Hi {row['client_name']}, friendly reminder for ${row['amount']} invoice. Thanks! - {my_name}"
+                        wa_msg = f"Hi {row['client_name']}, this is {my_name} from {agency_name}. Just a friendly nudge regarding your ${row['amount']} invoice. Thanks!"
                         wa_url = f"https://wa.me/{p_clean}?text={urllib.parse.quote(wa_msg)}"
                         st.markdown(f'''
                             <a href="{wa_url}" target="_blank">
@@ -130,14 +124,15 @@ if page == "📊 Dashboard":
                     else:
                         st.warning("No phone number saved.")
                 
+                # Column 3: Status Actions
                 with c3:
-                    if st.button("✅ Mark Paid", key=f"paid_{row['id']}"):
+                    if st.button("✅ Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-                    if st.button("🗑️ Del", key=f"del_{row['id']}"):
+                    if st.button("🗑️ Del", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
-    else: st.info("No active invoices. Add one in Data Entry!")
+    else: st.info("No active invoices found.")
 
-# --- 6. DATA ENTRY ---
+# --- 6. DATA ENTRY (SUPPORTING PHONE/EMAIL) ---
 elif page == "📥 Data Entry":
     st.header("📥 Multi-Channel Data Entry")
     t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
@@ -151,7 +146,7 @@ elif page == "📥 Data Entry":
                     "due_date": str(cd), "user_id": u_id, "status": "Pending"
                 }).execute()
                 st.success("Invoice Saved!"); st.rerun()
-    # (Other tabs logic remains identical)
+    # (AI Scanner and CSV logic remain as previously provided)
 
 # --- 7. HISTORY & ADMIN ---
 elif page == "📜 History":
