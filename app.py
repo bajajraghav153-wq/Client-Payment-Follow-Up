@@ -47,7 +47,17 @@ if st.session_state.user is None:
                     res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                     st.session_state.user = res.user
                     st.rerun()
-                except: st.error("Authentication Failed.")
+                except: st.error("Authentication Failed. Check credentials or Verify Email.")
+        with t2:
+            re = st.text_input("New Email")
+            rp = st.text_input("New Password", type="password")
+            if st.button("Create Account"):
+                try:
+                    res = supabase.auth.sign_up({"email": re, "password": rp})
+                    # Create default profile
+                    supabase.table("profiles").insert({"id": res.user.id, "role": "agency"}).execute()
+                    st.success("Success! Check email for link.")
+                except: st.error("Registration failed.")
     st.stop()
 
 u_id = st.session_state.user.id
@@ -58,6 +68,7 @@ prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execut
 u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
 is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
+# Forced Admin for Master Account
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 
@@ -82,7 +93,7 @@ with st.sidebar:
     if u_role == 'agency':
         nav = ["📊 Dashboard", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
-        nav = ["📋 My Invoices"]
+        nav = ["📋 My Payments"]
     page = st.radio("Navigation", nav)
 
 # --- 5. AGENCY LOGIC ---
@@ -100,81 +111,65 @@ if u_role == 'agency':
             for i, row in pending.iterrows():
                 with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                     c1, c2, c3 = st.columns([1,1,1])
-                    if c1.button("✅ Mark Paid", key=f"p_{row['id']}"):
+                    if c1.button("✅ Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
                     
-                    # WhatsApp Logic
                     if row.get('phone'):
                         p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                        wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for ${row['amount']} invoice."
-                        c2.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
+                        wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for payment."
+                        c2.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                     
                     if c3.button("🗑️ Delete", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
-        else: st.info("No active invoices found.")
+        else: st.info("No active invoices. Go to 'Data Entry' to add one!")
 
     elif page == "📥 Data Entry":
         st.header("📥 Multi-Channel Data Entry")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
         
         with t1:
-            st.subheader("AI Invoice Processor")
-            img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'], key="ai_upload")
-            if img_f and st.button("🚀 Process with Gemini 3"):
+            img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
+            if img_f and st.button("🚀 AI Process"):
                 ai_res = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img_f)])
                 data = json.loads(ai_res.text.replace("```json","").replace("```",""))
-                data.update({"user_id": u_id, "status": "Pending"})
-                supabase.table("invoices").insert(data).execute()
-                st.success("AI Extracted and Saved!"); st.rerun()
+                data.update({"user_id": u_id})
+                supabase.table("invoices").insert(data).execute(); st.success("AI Extracted!")
 
         with t2:
-            st.subheader("Manual Invoice Entry")
-            with st.form("manual_entry_form", clear_on_submit=True):
-                client_n = st.text_input("Client Name")
-                client_e = st.text_input("Client Email")
-                client_p = st.text_input("Phone Number (e.g. 919876543210)")
-                inv_amt = st.number_input("Amount ($)", min_value=0.0)
-                inv_due = st.date_input("Due Date")
-                if st.form_submit_button("💾 Save to Database"):
-                    if client_n and client_e:
-                        supabase.table("invoices").insert({
-                            "client_name": client_n,
-                            "email": client_e,
-                            "phone": client_p,
-                            "amount": inv_amt,
-                            "due_date": str(inv_due),
-                            "user_id": u_id,
-                            "status": "Pending"
-                        }).execute()
-                        st.success("Manual Entry Saved!")
-                    else:
-                        st.warning("Name and Email are required.")
+            with st.form("man_entry", clear_on_submit=True):
+                cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); cp = st.text_input("Phone")
+                ca = st.number_input("Amount ($)"); cd = st.date_input("Due Date")
+                if st.form_submit_button("Save to Database"):
+                    supabase.table("invoices").insert({"client_name": cn, "email": ce, "phone": cp, "amount": ca, "due_date": str(cd), "user_id": u_id}).execute()
+                    st.success("Saved!"); st.rerun()
 
         with t3:
-            st.subheader("Bulk CSV Import")
-            csv_f = st.file_uploader("Select CSV File", type="csv", key="csv_upload")
+            csv_f = st.file_uploader("Select CSV", type="csv")
             if csv_f and st.button("Confirm Bulk Upload"):
                 csv_df = pd.read_csv(csv_f)
                 recs = csv_df.to_dict(orient='records')
-                for r in recs: r.update({"user_id": u_id, "status": "Pending"})
-                supabase.table("invoices").insert(recs).execute()
-                st.success(f"Imported {len(recs)} invoices!"); st.rerun()
+                for r in recs: r.update({"user_id": u_id})
+                supabase.table("invoices").insert(recs).execute(); st.success("CSV Imported!"); st.rerun()
 
     elif page == "📜 History":
         st.header("📜 Completed Transactions")
         res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
         if res.data:
-            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'phone', 'status']])
+            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
         else: st.info("No payment history found.")
 
     elif page == "👑 Super Admin" and is_admin:
         st.title("👑 Platform Analytics")
-        all_res = supabase.table("invoices").select("*").execute()
+        # Pulling Global Stats
+        all_res = supabase.table("invoices").select("client_name, amount, status").execute()
         if all_res.data:
             df_all = pd.DataFrame(all_res.data)
+            st.metric("Global Revenue", f"${df_all['amount'].sum():,.2f}")
             report = df_all.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
             report.columns = ['Client Name', 'Total Volume ($)', 'Invoices']
             st.table(report)
+        else:
+            st.warning("The platform is currently empty. Add invoices in 'Data Entry' to see analytics here.")
 
 # --- 6. CLIENT LOGIC ---
 else:
@@ -182,4 +177,4 @@ else:
     res = supabase.table("invoices").select("*").eq("email", u_email).execute()
     if res.data:
         st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
-    else: st.info("No invoices found for your email address.")
+    else: st.info("No invoices found for your account.")
