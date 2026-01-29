@@ -99,10 +99,17 @@ if u_role == 'agency':
             
             for i, row in pending.iterrows():
                 with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
-                    c1, c2 = st.columns(2)
+                    c1, c2, c3 = st.columns([1,1,1])
                     if c1.button("✅ Mark Paid", key=f"p_{row['id']}"):
                         supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-                    if c2.button("🗑️ Delete", key=f"d_{row['id']}"):
+                    
+                    # WhatsApp Logic
+                    if row.get('phone'):
+                        p_clean = "".join(filter(str.isdigit, str(row['phone'])))
+                        wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for ${row['amount']} invoice."
+                        c2.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
+                    
+                    if c3.button("🗑️ Delete", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted": True}).eq("id", row['id']).execute(); st.rerun()
         else: st.info("No active invoices found.")
 
@@ -114,7 +121,7 @@ if u_role == 'agency':
             st.subheader("AI Invoice Processor")
             img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'], key="ai_upload")
             if img_f and st.button("🚀 Process with Gemini 3"):
-                ai_res = model.generate_content(["Extract client_name, email, amount as JSON.", Image.open(img_f)])
+                ai_res = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img_f)])
                 data = json.loads(ai_res.text.replace("```json","").replace("```",""))
                 data.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(data).execute()
@@ -125,22 +132,23 @@ if u_role == 'agency':
             with st.form("manual_entry_form", clear_on_submit=True):
                 client_n = st.text_input("Client Name")
                 client_e = st.text_input("Client Email")
+                client_p = st.text_input("Phone Number (e.g. 919876543210)")
                 inv_amt = st.number_input("Amount ($)", min_value=0.0)
                 inv_due = st.date_input("Due Date")
                 if st.form_submit_button("💾 Save to Database"):
-                    # Check if fields are filled
                     if client_n and client_e:
                         supabase.table("invoices").insert({
                             "client_name": client_n,
                             "email": client_e,
+                            "phone": client_p,
                             "amount": inv_amt,
                             "due_date": str(inv_due),
                             "user_id": u_id,
                             "status": "Pending"
                         }).execute()
-                        st.success("Manual Entry Saved Successfully!")
+                        st.success("Manual Entry Saved!")
                     else:
-                        st.warning("Please provide both Name and Email.")
+                        st.warning("Name and Email are required.")
 
         with t3:
             st.subheader("Bulk CSV Import")
@@ -150,13 +158,13 @@ if u_role == 'agency':
                 recs = csv_df.to_dict(orient='records')
                 for r in recs: r.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(recs).execute()
-                st.success(f"Successfully imported {len(recs)} invoices!"); st.rerun()
+                st.success(f"Imported {len(recs)} invoices!"); st.rerun()
 
     elif page == "📜 History":
         st.header("📜 Completed Transactions")
         res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
         if res.data:
-            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
+            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'phone', 'status']])
         else: st.info("No payment history found.")
 
     elif page == "👑 Super Admin" and is_admin:
