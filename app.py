@@ -10,12 +10,15 @@ import io
 # --- 1. CONFIG & STYLING ---
 st.set_page_config(page_title="CashFlow Pro", layout="wide", page_icon="💰")
 
+# Custom CSS for centered alignment and Deep Dark Blue theme
 st.markdown("""
     <style>
     .stApp { background-color: #001B33; }
     [data-testid="stMetricValue"] { font-size: 28px; color: #00D1FF; font-weight: bold; }
     [data-testid="stMetric"] { background-color: #002A4D; border: 1px solid #004080; padding: 20px; border-radius: 15px; }
     .stButton>button { border-radius: 10px; background: linear-gradient(90deg, #00D1FF, #0080FF); color: white; font-weight: bold; width: 100%; border: none; }
+    
+    /* Force Middle Alignment for all table headers and cells */
     th, td { text-align: center !important; vertical-align: middle !important; color: white !important; }
     .streamlit-expanderHeader { background-color: #002A4D !important; border-radius: 10px !important; color: white !important; }
     </style>
@@ -40,15 +43,17 @@ if st.session_state.user is None:
         st.title("🔐 SaaS Access")
         t1, t2 = st.tabs(["Login", "Register"])
         with t1:
-            e = st.text_input("Email")
-            p = st.text_input("Password", type="password")
+            e = st.text_input("Email", key="l_email")
+            p = st.text_input("Password", type="password", key="l_pass")
             if st.button("Sign In"):
-                res = supabase.auth.sign_in_with_password({"email": e, "password": p})
-                st.session_state.user = res.user
-                st.rerun()
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                    st.session_state.user = res.user
+                    st.rerun()
+                except: st.error("Login Failed. Check credentials.")
         with t2:
-            re = st.text_input("New Email")
-            rp = st.text_input("New Password", type="password")
+            re = st.text_input("New Email", key="r_email")
+            rp = st.text_input("New Password", type="password", key="r_pass")
             if st.button("Create Account"):
                 supabase.auth.sign_up({"email": re, "password": rp})
                 st.success("Success! Check email for link.")
@@ -57,7 +62,7 @@ if st.session_state.user is None:
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Load Profile Data for Sidebar
+# Load Profile Data for Sidebar and Role Check
 user_profile = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
 is_admin_user = user_profile.data.get("is_admin", False) if user_profile.data else False
 if u_email == 'ramanbajaj154@gmail.com': is_admin_user = True
@@ -98,11 +103,13 @@ if page == "📊 Dashboard":
         m1.metric("Pending ⏳", f"${pending_df['amount'].sum():,.2f}")
         m2.metric("Collected ✅", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
         
-        # EXCEL DOWNLOAD
+        # Excel Export logic
         buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Invoices')
-        st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+        try:
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df.to_excel(writer, index=False, sheet_name='Invoices')
+            st.download_button(label="📥 Download Excel Report", data=buffer.getvalue(), file_name="invoice_report.xlsx", mime="application/vnd.ms-excel")
+        except: st.warning("Excel module loading...")
 
         for i, row in pending_df.iterrows():
             with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
@@ -113,7 +120,7 @@ if page == "📊 Dashboard":
                         response = model.generate_content(prompt)
                         supabase.table("invoices").update({"last_draft": response.text}).eq("id", row['id']).execute()
                         st.rerun()
-                    st.text_area("Email:", value=row.get('last_draft', ""), height=150, key=f"msg_{row['id']}")
+                    st.text_area("Email Draft:", value=row.get('last_draft', ""), height=150, key=f"msg_{row['id']}")
                 with c2:
                     phone = "".join(filter(str.isdigit, str(row['phone'])))
                     wa_url = f"https://wa.me/{phone}?text=" + urllib.parse.quote(f"Hi {row['client_name']}, friendly nudge for the ${row['amount']} invoice.")
@@ -123,9 +130,9 @@ if page == "📊 Dashboard":
                         supabase.table("invoices").update({"status":"Paid"}).eq("id",row['id']).execute(); st.rerun()
                     if st.button("🗑️ Del", key=f"d_{row['id']}"):
                         supabase.table("invoices").update({"is_deleted":True}).eq("id",row['id']).execute(); st.rerun()
-    else: st.info("No active invoices.")
+    else: st.info("No active invoices found.")
 
-# --- 5. DATA ENTRY (RESTORED ALL METHODS) ---
+# --- 5. DATA ENTRY (AI, Manual, and CSV RESTORED) ---
 elif page == "📥 Data Entry":
     st.header("📥 Data Intake Hub")
     t1, t2, t3 = st.tabs(["📸 AI Image Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
@@ -133,9 +140,9 @@ elif page == "📥 Data Entry":
     with t1:
         img_f = st.file_uploader("Upload Invoice Image", type=['png','jpg','jpeg'])
         if img_f and st.button("🚀 Process with Gemini 3"):
-            res = model.generate_content(["Extract data as JSON.", Image.open(img_f)])
+            res = model.generate_content(["Extract client_name, amount, email, phone as JSON.", Image.open(img_f)])
             data = json.loads(res.text.replace("```json","").replace("```",""))
-            data.update({"user_id": u_id, "status": "Pending"})
+            data.update({"user_id": u_id, "status": "Pending", "is_deleted": False})
             supabase.table("invoices").insert(data).execute(); st.success("AI Extracted and Saved!")
 
     with t2:
@@ -143,23 +150,28 @@ elif page == "📥 Data Entry":
             n = st.text_input("Client Name"); e = st.text_input("Email"); p = st.text_input("Phone")
             a = st.number_input("Amount", min_value=0.0); d = st.date_input("Due Date")
             if st.form_submit_button("Save Invoice"):
-                supabase.table("invoices").insert({"client_name":n, "email":e, "phone":p, "amount":a, "due_date":str(d), "user_id": u_id, "status":"Pending"}).execute()
-                st.success("Saved!")
+                supabase.table("invoices").insert({
+                    "client_name": n, "email": e, "phone": p, "amount": a, 
+                    "due_date": str(d), "user_id": u_id, "status": "Pending", "is_deleted": False
+                }).execute()
+                st.success("Invoice Saved Locally!"); st.rerun()
 
     with t3:
         csv_f = st.file_uploader("Upload CSV", type="csv")
         if csv_f and st.button("Confirm Bulk Upload"):
             df_csv = pd.read_csv(csv_f)
             data_list = df_csv.to_dict(orient='records')
-            for item in data_list: item.update({"user_id": u_id, "status": "Pending"})
-            supabase.table("invoices").insert(data_list).execute(); st.rerun()
+            for item in data_list: 
+                item.update({"user_id": u_id, "status": "Pending", "is_deleted": False})
+            supabase.table("invoices").insert(data_list).execute(); st.success("Bulk Data Imported!"); st.rerun()
 
 # --- 6. HISTORY ---
 elif page == "📜 History":
     st.header("Completed Transactions")
     res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
-    if res.data: st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']])
-    else: st.info("No history yet.")
+    if res.data: 
+        st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']])
+    else: st.info("No payment history yet.")
 
 # --- 7. SUPER ADMIN ---
 elif page == "👑 Super Admin" and is_admin_user:
@@ -172,4 +184,4 @@ elif page == "👑 Super Admin" and is_admin_user:
         st.subheader("👥 Client Activity Report")
         report = all_df.groupby('client_name').agg({'amount': 'sum', 'status': 'count'}).reset_index()
         report.columns = ['Client Name', 'Total Billing ($)', 'Invoice Count']
-        st.table(report) # Perfect middle alignment
+        st.table(report)
