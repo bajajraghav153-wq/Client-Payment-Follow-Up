@@ -58,7 +58,6 @@ prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execut
 u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
 is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-# Master Override for Raghav
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 
@@ -127,15 +126,21 @@ if u_role == 'agency':
                 client_n = st.text_input("Client Name")
                 client_e = st.text_input("Client Email")
                 inv_amt = st.number_input("Amount ($)", min_value=0.0)
-                if st.form_submit_button("💾 Save Invoice"):
-                    supabase.table("invoices").insert({
-                        "client_name": client_n,
-                        "email": client_e,
-                        "amount": inv_amt,
-                        "user_id": u_id,
-                        "status": "Pending"
-                    }).execute()
-                    st.success("Invoice Saved!"); st.rerun()
+                inv_due = st.date_input("Due Date")
+                if st.form_submit_button("💾 Save to Database"):
+                    # Check if fields are filled
+                    if client_n and client_e:
+                        supabase.table("invoices").insert({
+                            "client_name": client_n,
+                            "email": client_e,
+                            "amount": inv_amt,
+                            "due_date": str(inv_due),
+                            "user_id": u_id,
+                            "status": "Pending"
+                        }).execute()
+                        st.success("Manual Entry Saved Successfully!")
+                    else:
+                        st.warning("Please provide both Name and Email.")
 
         with t3:
             st.subheader("Bulk CSV Import")
