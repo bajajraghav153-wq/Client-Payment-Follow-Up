@@ -8,7 +8,7 @@ import json
 import io
 from datetime import date, datetime, timedelta
 
-# --- 1. UI & THEME (2026 Compliant) ---
+# --- 1. CONFIG & THEME (2026 Compliant) ---
 st.set_page_config(page_title="CashFlow Pro Elite", layout="wide", page_icon="🚀")
 
 st.markdown("""
@@ -46,19 +46,20 @@ if st.session_state.user is None:
                 res = supabase.auth.sign_in_with_password({"email": e, "password": p})
                 st.session_state.user = res.user
                 st.rerun()
-            except: st.error("Login Failed. Ensure 'Confirm Email' is OFF in Supabase settings.")
+            except: st.error("Login Failed. Check Supabase 'Confirm Email' setting.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
 # --- 3. HARD-CODED ROLE ENFORCEMENT ---
+# This ensures Raman Bajaj always sees all features regardless of DB lag
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
     u_role, is_admin = 'client', False
 
-# --- 4. SIDEBAR NAVIGATION (THE ELITE SEVEN) ---
+# --- 4. SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("🏦 Revenue Master")
     st.write(f"Logged in: **{u_email}**")
@@ -75,7 +76,7 @@ df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
 # --- 5. PAGE MODULES ---
 
 if page == "📊 Dashboard":
-    st.title("💸 Active Collections")
+    st.title("💸 Active Ledger")
     if not df.empty:
         pending = df[df['status'] == 'Pending']
         m1, m2 = st.columns(2)
@@ -88,13 +89,13 @@ if page == "📊 Dashboard":
                 c1, c2, c3 = st.columns([2, 2, 1])
                 with c1:
                     if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
-                        ai_res = model.generate_content(f"Draft a nudge for {row['client_name']} for ${row['amount']}.").text
+                        ai_res = model.generate_content(f"Nudge {row['client_name']} for ${row['amount']}.").text
                         supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
                     st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
                 with c2:
                     if row.get('phone'):
                         p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                        wa_url = f"https://wa.me/{p_clean}?text=Friendly nudge for payment."
+                        wa_url = f"https://wa.me/{p_clean}?text=Payment nudge."
                         st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                 with c3:
                     if st.button("✅ Paid", key=f"p_{row['id']}"):
@@ -111,28 +112,27 @@ elif page == "🤖 Automation Hub":
             if st.button("🚀 Trigger Bulk Nudges"):
                 for _, r in overdue.iterrows():
                     p_clean = "".join(filter(str.isdigit, str(r['phone'])))
-                    wa_url = f"https://wa.me/{p_clean}?text=" + urllib.parse.quote(f"Invoice for ${r['amount']} is overdue.")
+                    msg = f"Hi {r['client_name']}, your invoice for ${r['amount']} is overdue. Pay here: {r.get('payment_link', '')}"
+                    wa_url = f"https://wa.me/{p_clean}?text={urllib.parse.quote(msg)}"
                     st.markdown(f'<a href="{wa_url}" target="_blank">📲 Nudge {r["client_name"]}</a>', unsafe_allow_html=True)
 
 elif page == "📈 Profit Intel":
-    st.title("📈 Advanced Profit Intelligence")
+    st.title("📈 Profit Intelligence")
     if not df.empty:
-        total_billed = df['amount'].sum()
-        total_paid = df[df['status'] == 'Paid']['amount'].sum()
-        eff_rate = (total_paid / total_billed) * 100 if total_billed > 0 else 0
+        billed = df['amount'].sum()
+        paid = df[df['status'] == 'Paid']['amount'].sum()
+        eff = (paid / billed) * 100 if billed > 0 else 0
         c1, c2 = st.columns(2)
-        c1.metric("Collection Efficiency", f"{eff_rate:.1f}%")
-        c2.metric("Liquid Cash", f"${total_paid:,.2f}")
-        
+        c1.metric("Collection Efficiency", f"{eff:.1f}%")
+        c2.metric("Liquid Cash", f"${paid:,.2f}")
         st.subheader("🗓️ Debt Aging")
         df['days_late'] = pd.to_datetime(df['due_date']).dt.date.apply(lambda x: (date.today() - x).days if x < date.today() else 0)
         st.dataframe(df[df['status'] == 'Pending'][['client_name', 'amount', 'days_late']], width='stretch')
-        
-        if st.button("Generate CFO Strategy"):
-            st.write(model.generate_content(f"Analyze ${total_paid} collected vs ${total_billed} billed.").text)
+        if st.button("Generate Strategy"):
+            st.write(model.generate_content(f"Analyze ${paid} collected vs ${billed} billed.").text)
 
 elif page == "🔮 Forecasting":
-    st.title("🔮 Forecasting & CLV")
+    st.title("🔮 Forecasting")
     if not df.empty:
         clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
         st.bar_chart(data=clv, x='client_name', y='amount')
