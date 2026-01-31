@@ -52,7 +52,7 @@ if st.session_state.user is None:
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# --- 3. MASTER ROLE ENFORCEMENT ---
+# --- 3. MASTER ROLE ENFORCEMENT (Raghav Bypass) ---
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
@@ -94,8 +94,7 @@ if u_role == 'agency':
                     c1, c2, c3 = st.columns([2, 2, 1])
                     with c1:
                         if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
-                            pl = row.get('payment_link', 'our portal')
-                            ai_res = model.generate_content(f"Nudge for {row['client_name']} regarding ${row['amount']}. Pay: {pl}").text
+                            ai_res = model.generate_content(f"Nudge for {row['client_name']} regarding ${row['amount']}.").text
                             supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
                         st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
                     with c2:
@@ -114,13 +113,7 @@ if u_role == 'agency':
             st.bar_chart(data=clv, x='client_name', y='amount')
             st.dataframe(clv, use_container_width=True)
 
-    elif page == "📜 History":
-        st.header("📜 Completed Transactions")
-        paid_df = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
-        if not paid_df.empty:
-            st.table(paid_df[['client_name', 'amount', 'due_date']])
-
-    elif page == "📥 Data Entry":
+    elif page == "📥 Data Entry": # RESTORED AI SCANNER & BULK CSV
         st.header("📥 Multi-Channel Intake")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
         with t1:
@@ -144,8 +137,14 @@ if u_role == 'agency':
                 for r in recs: r.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(recs).execute(); st.success("Imported!"); st.rerun()
 
+    elif page == "📜 History":
+        st.header("📜 Completed Transactions")
+        paid_df = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
+        if not paid_df.empty:
+            st.table(paid_df[['client_name', 'amount', 'due_date']])
+
     elif page == "👑 Super Admin" and is_admin:
-        st.title("👑 Global Platform Analytics")
+        st.title("👑 Global Analytics")
         all_r = supabase.table("invoices").select("*").execute()
         if all_r.data:
             df_all = pd.DataFrame(all_r.data)
