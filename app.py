@@ -8,7 +8,7 @@ import json
 import io
 from datetime import date, datetime, timedelta
 
-# --- 1. CONFIG & THEME ---
+# --- 1. CONFIG & THEME (Standardized for 2026) ---
 st.set_page_config(page_title="CashFlow Pro Intelligence", layout="wide", page_icon="🚀")
 
 st.markdown("""
@@ -18,6 +18,7 @@ st.markdown("""
     [data-testid="stMetric"] { background-color: #002A4D; border: 1px solid #004080; padding: 25px; border-radius: 15px; }
     .stButton>button { border-radius: 10px; background: linear-gradient(90deg, #00D1FF, #0080FF); color: white; font-weight: bold; width: 100%; border: none; height: 3em; }
     th, td { text-align: center !important; color: white !important; }
+    .streamlit-expanderHeader { background-color: #002A4D !important; color: white !important; font-weight: bold !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -30,69 +31,162 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION (Master Protected) ---
+# --- 2. AUTHENTICATION (Ironclad) ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.user is None:
-    st.title("🔐 SaaS Gateway")
-    # ... (Authentication logic)
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.title("🔐 SaaS Gateway")
+        e = st.text_input("Email", key="l_email")
+        p = st.text_input("Password", type="password", key="l_pass")
+        if st.button("Sign In"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                st.session_state.user = res.user
+                st.rerun()
+            except: st.error("Login Failed. Ensure 'Confirm Email' is OFF in Supabase settings.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Hardcoded Master Access for Raman Bajaj
+# --- 3. HARD-CODED ROLE ENFORCEMENT ---
+# This ensures that your specific email ALWAYS sees all Agency features
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
     u_role, is_admin = 'client', False
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 4. SIDEBAR NAVIGATION (RESTORED SEVEN-TAB MENU) ---
 with st.sidebar:
     st.title("🏦 Revenue Master")
+    st.write(f"Logged in: **{u_email}**")
     if st.button("Logout"):
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
-    nav = ["📊 Dashboard", "🤖 Automation Hub", "📈 Profit Intel", "🔮 Forecasting", "📥 Data Entry", "📜 History", "👑 Super Admin"]
+    
+    if u_role == 'agency':
+        nav = ["📊 Dashboard", "🤖 Automation Hub", "📈 Profit Intel", "🔮 Forecasting", "📥 Data Entry", "📜 History", "👑 Super Admin"]
+    else:
+        nav = ["📋 My Invoices"]
     page = st.radio("Navigation", nav)
 
 # GLOBAL DATA FETCH
+# Load once here so all modules have consistent data
 res = supabase.table("invoices").select("*").eq("user_id", u_id).execute()
 df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
-# --- 4. FORECASTING MODULE (RESTORED & IMPROVED) ---
-if page == "🔮 Forecasting":
-    st.title("🔮 Revenue Forecasting & CLV")
-    
-    if not df.empty:
-        # 1. Predictive Liquidity Engine
-        total_billed = df['amount'].sum()
-        total_paid = df[df['status'] == 'Paid']['amount'].sum()
-        pending_val = df[df['status'] == 'Pending']['amount'].sum()
-        
-        # Calculate historical collection rate
-        collection_rate = (total_paid / total_billed) if total_billed > 0 else 0
-        projected_recovery = pending_val * collection_rate
-        
-        st.subheader("Projected Cash Recovery")
-        c1, c2 = st.columns(2)
-        c1.metric("Current Pending", f"${pending_val:,.2f}")
-        c2.metric("Expected Realized Cash", f"${projected_recovery:,.2f}", 
-                  help=f"Based on your current {collection_rate:.1%} collection rate.")
-        
-        st.divider()
-        
-        # 2. Client Lifetime Value (CLV)
-        st.subheader("📊 Top Revenue Contributors (CLV)")
-        clv_df = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
-        st.bar_chart(data=clv_df, x='client_name', y='amount')
-        
-        # 2026 compliant table syntax
-        st.write("### Client Value Details")
-        st.dataframe(clv_df, width='stretch')
-        
-    else:
-        st.info("No transaction data available. Please add invoices to generate forecasting insights.")
+# --- 5. PAGE MODULES ---
 
-# (Logic for Dashboard, Automation, Data Entry, History, etc. follows standard structure)
+# --- A: DASHBOARD ---
+if page == "📊 Dashboard":
+    st.title("💸 Active Collections")
+    if not df.empty:
+        pending = df[df['status'] == 'Pending']
+        m1, m2 = st.columns(2)
+        m1.metric("Pending Total", f"${pending['amount'].sum():,.2f}")
+        m2.metric("Collected Total", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
+        for i, row in pending.iterrows():
+            due_raw = row.get('due_date')
+            tag = f"🚨 {(date.today() - date.fromisoformat(due_raw)).days} Days Overdue" if due_raw and date.fromisoformat(due_raw) < date.today() else "🗓️ Current"
+            with st.expander(f"{tag} | 📋 {row['client_name']} — ${row['amount']}"):
+                c1, c2, c3 = st.columns([2, 2, 1])
+                with c1:
+                    if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
+                        ai_res = model.generate_content(f"Draft a nudge for {row['client_name']} for ${row['amount']}.").text
+                        supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
+                    st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
+                with c2:
+                    if row.get('phone'):
+                        p_clean = "".join(filter(str.isdigit, str(row['phone'])))
+                        wa_url = f"https://wa.me/{p_clean}?text=Nudge for payment of ${row['amount']}."
+                        st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
+                with c3:
+                    if st.button("✅ Paid", key=f"p_{row['id']}"):
+                        supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
+    else: st.info("No data found. Add data in 'Data Entry'.")
+
+# --- B: AUTOMATION HUB ---
+elif page == "🤖 Automation Hub":
+    st.title("🤖 Bulk Automation Hub")
+    if not df.empty:
+        df['due_date_dt'] = pd.to_datetime(df['due_date']).dt.date
+        overdue = df[(df['status'] == 'Pending') & (df['due_date_dt'] < date.today())]
+        st.metric("Overdue Clients Targeted", len(overdue))
+        if not overdue.empty:
+            st.dataframe(overdue[['client_name', 'amount', 'due_date']], width='stretch')
+            if st.button("🚀 Trigger Bulk WhatsApp Queue"):
+                for _, r in overdue.iterrows():
+                    p_clean = "".join(filter(str.isdigit, str(r['phone'])))
+                    msg = f"Hi {r['client_name']}, your invoice for ${r['amount']} is overdue. Pay here: {r.get('payment_link', 'our portal')}"
+                    wa_url = f"https://wa.me/{p_clean}?text={urllib.parse.quote(msg)}"
+                    st.markdown(f'<a href="{wa_url}" target="_blank">📲 Nudge {r["client_name"]}</a>', unsafe_allow_html=True)
+        else: st.success("No overdue invoices found.")
+
+# --- C: PROFIT INTEL ---
+elif page == "📈 Profit Intel":
+    st.title("📈 Profit Intelligence")
+    if not df.empty:
+        billed = df['amount'].sum()
+        paid = df[df['status'] == 'Paid']['amount'].sum()
+        eff = (paid / billed) * 100 if billed > 0 else 0
+        c1, c2 = st.columns(2)
+        c1.metric("Collection Efficiency", f"{eff:.1f}%")
+        c2.metric("Liquid Cash on Hand", f"${paid:,.2f}")
+        if st.button("Generate Strategy"):
+            st.write(model.generate_content(f"As CFO, analyze my billed ${billed} and collected ${paid}.").text)
+
+# --- D: FORECASTING ---
+elif page == "🔮 Forecasting":
+    st.title("🔮 Forecasting & CLV")
+    if not df.empty:
+        clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
+        st.subheader("Client Lifetime Value (Top Contributors)")
+        st.bar_chart(data=clv, x='client_name', y='amount')
+        st.dataframe(clv, width='stretch')
+
+# --- E: DATA ENTRY (AI, MANUAL, BULK) ---
+elif page == "📥 Data Entry":
+    st.header("📥 Multi-Channel Intake")
+    t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
+    with t1:
+        img = st.file_uploader("Upload Image", type=['png','jpg','jpeg'], key="up_ai")
+        if img and st.button("🚀 Process Image"):
+            res_ai = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img)])
+            data = json.loads(res_ai.text.replace("```json","").replace("```",""))
+            data.update({"user_id": u_id, "status": "Pending", "due_date": str(date.today())})
+            supabase.table("invoices").insert(data).execute(); st.rerun()
+    with t2:
+        with st.form("manual"):
+            cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone")
+            ca = st.number_input("Amount"); cd = st.date_input("Due Date"); pl = st.text_input("Payment Link")
+            if st.form_submit_button("Save"):
+                supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id":u_id, "payment_link":pl, "status":"Pending"}).execute(); st.rerun()
+    with t3:
+        csv = st.file_uploader("Upload CSV", type="csv", key="up_csv")
+        if csv:
+            df_c = pd.read_csv(csv)
+            st.dataframe(df_c.head(), width='stretch')
+            if st.button("Confirm Bulk Import"):
+                recs = df_c.to_dict(orient='records')
+                for r in recs: r.update({"user_id": u_id, "status": "Pending"})
+                supabase.table("invoices").insert(recs).execute(); st.rerun()
+
+# --- F: HISTORY ---
+elif page == "📜 History":
+    st.header("📜 Completed Transactions")
+    paid_df = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
+    if not paid_df.empty:
+        st.dataframe(paid_df[['client_name', 'amount', 'due_date']], width='stretch')
+    else: st.info("No paid history found.")
+
+# --- G: SUPER ADMIN ---
+elif page == "👑 Super Admin" and is_admin:
+    st.title("👑 Global Platform Analytics")
+    all_r = supabase.table("invoices").select("*").execute()
+    if all_r.data:
+        df_all = pd.DataFrame(all_r.data)
+        st.metric("Total Revenue", f"${df_all['amount'].sum():,.2f}")
+        st.bar_chart(df_all.groupby('client_name')['amount'].sum())
