@@ -8,8 +8,8 @@ import json
 import io
 from datetime import date
 
-# --- 1. THEME & SETTINGS ---
-st.set_page_config(page_title="CashFlow Pro Master", layout="wide", page_icon="💰")
+# --- 1. UI & THEME ---
+st.set_page_config(page_title="CashFlow Pro Ultra", layout="wide", page_icon="💰")
 
 st.markdown("""
     <style>
@@ -39,53 +39,54 @@ if st.session_state.user is None:
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.title("🔐 SaaS Gateway")
-        t1, t2 = st.tabs(["Login", "Register"])
-        with t1:
-            e = st.text_input("Email", key="l_email")
-            p = st.text_input("Password", type="password", key="l_pass")
-            if st.button("Sign In"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": e, "password": p})
-                    st.session_state.user = res.user
-                    st.rerun()
-                except: st.error("Login Failed. Ensure 'Confirm Email' is OFF in Supabase settings.")
-        with t2:
-            re = st.text_input("New Email", key="r_email")
-            rp = st.text_input("New Password", type="password", key="r_pass")
-            role_sel = st.radio("Account Type:", ["Agency (Manager)", "Client (Viewer)"])
-            if st.button("Create Account"):
-                try:
-                    res = supabase.auth.sign_up({"email": re, "password": rp})
-                    r_val = 'agency' if "Agency" in role_sel else 'client'
-                    supabase.table("profiles").insert({"id": res.user.id, "role": r_val}).execute()
-                    st.success("Account Created! You can now log in.")
-                except: st.error("Registration failed.")
+        e = st.text_input("Email", key="l_email")
+        p = st.text_input("Password", type="password", key="l_pass")
+        if st.button("Sign In"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                st.session_state.user = res.user
+                st.rerun()
+            except: st.error("Login Failed. Check Supabase 'Confirm Email' setting.")
     st.stop()
 
-u_email = st.session_state.user.email
 u_id = st.session_state.user.id
+u_email = st.session_state.user.email
 
-# --- 3. ROLE & SIDEBAR ---
+# --- 3. ROLE DETECTION (Raghav Master Override) ---
 prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
 u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
 is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-if u_email == 'ramanbajaj154@gmail.com': u_role, is_admin = 'agency', True
+# Hardcode Override to ensure your tabs never disappear
+if u_email == 'ramanbajaj154@gmail.com':
+    u_role, is_admin = 'agency', True
 
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 CashFlow Ultra")
     st.write(f"Logged in: **{u_email}**")
     if st.button("Logout"):
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
+
+    db_admin = prof_res.data.get("admin_name", "Admin") if prof_res.data else "Admin"
+    db_agency = prof_res.data.get("agency_name", "My Agency") if prof_res.data else "My Agency"
+    my_name = st.text_input("Your Name", value=db_admin)
+    agency_name = st.text_input("Agency Name", value=db_agency)
     
+    if st.button("💾 Save Profile Settings"):
+        supabase.table("profiles").update({"admin_name": my_name, "agency_name": agency_name}).eq("id", u_id).execute()
+        st.success("Profile Updated!"); st.rerun()
+
+    st.divider()
+    # Explicitly define navigation based on role
     if u_role == 'agency':
         nav = ["📊 Dashboard", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
         nav = ["📋 My Invoices"]
     page = st.radio("Navigation", nav)
 
-# --- 4. AGENCY PAGES ---
+# --- 5. AGENCY PAGES ---
 if u_role == 'agency':
     if page == "📊 Dashboard":
         st.title("💸 Active Collections")
@@ -94,15 +95,10 @@ if u_role == 'agency':
         if not df.empty:
             pending = df[df['status'] == 'Pending']
             m1, m2 = st.columns(2)
-            m1.metric("Pending Total", f"${pending['amount'].sum():,.2f}")
+            m1.metric("Pending Invoices", len(pending))
             m2.metric("Collected Total", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
-            
             for i, row in pending.iterrows():
-                # Aging Logic
-                due_raw = row.get('due_date')
-                tag = f"🚨 {(date.today() - date.fromisoformat(due_raw)).days} Days Overdue" if due_raw and date.fromisoformat(due_raw) < date.today() else "🗓️ On Time"
-                
-                with st.expander(f"{tag} | 📋 {row['client_name']} — ${row['amount']}"):
+                with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                     c1, c2, c3 = st.columns([2, 2, 1])
                     with c1:
                         if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
@@ -112,29 +108,34 @@ if u_role == 'agency':
                     with c2:
                         if row.get('phone'):
                             p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                            wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, friendly nudge for payment."
+                            wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for payment."
                             st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                     with c3:
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-        else: st.info("No active invoices.")
+        else: st.info("Dashboard is empty. Use 'Data Entry' to add clients.")
 
     elif page == "📥 Data Entry":
-        st.header("📥 Data Entry")
+        st.header("📥 Multi-Channel Data Intake")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV"])
         with t2:
-            with st.form("manual_entry"):
-                cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone")
-                ca = st.number_input("Amount"); cd = st.date_input("Due Date")
-                if st.form_submit_button("Save Invoice"):
-                    supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id": u_id}).execute(); st.rerun()
+            with st.form("manual_entry_form", clear_on_submit=True):
+                cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); cp = st.text_input("Phone")
+                ca = st.number_input("Amount", min_value=0.0); cd = st.date_input("Due Date")
+                if st.form_submit_button("💾 Save Invoice"):
+                    supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id": u_id, "status": "Pending"}).execute()
+                    st.success("Invoice Saved!"); st.rerun()
 
-# --- 5. CLIENT VIEW ---
-else:
-    if page == "📋 My Invoices":
-        st.title("📋 My Invoices")
-        # Role-based access logic
-        res = supabase.table("invoices").select("*").eq("email", u_email).execute()
-        if res.data:
-            st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date', 'status']])
-        else: st.info("No invoices found for your account.")
+    elif page == "📜 History":
+        st.header("📜 Completed Transactions")
+        res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
+        if res.data: st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
+        else: st.info("No paid invoices found yet.")
+
+    elif page == "👑 Super Admin" and is_admin:
+        st.title("👑 Global Analytics")
+        all_res = supabase.table("invoices").select("*").execute()
+        if all_res.data:
+            df_all = pd.DataFrame(all_res.data)
+            st.metric("Total Revenue", f"${df_all['amount'].sum():,.2f}")
+            st.bar_chart(df_all.groupby('client_name')['amount'].sum())
