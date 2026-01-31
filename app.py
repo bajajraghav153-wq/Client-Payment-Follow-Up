@@ -30,7 +30,7 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION (Master Protected) ---
+# --- 2. AUTHENTICATION ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -48,21 +48,12 @@ if st.session_state.user is None:
                     st.session_state.user = res.user
                     st.rerun()
                 except: st.error("Login Failed.")
-        with auth_tabs[1]:
-            re = st.text_input("New Email", key="reg_email")
-            rp = st.text_input("New Password", type="password", key="reg_pass")
-            if st.button("Create Account"):
-                try:
-                    res = supabase.auth.sign_up({"email": re, "password": rp})
-                    supabase.table("profiles").upsert({"id": res.user.id, "role": "agency"}).execute()
-                    st.success("Account Created!")
-                except: st.error("Error.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Master Override for Raghav
+# Master Override
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
@@ -70,7 +61,7 @@ else:
     u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
     is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("🏦 Revenue Master")
     st.write(f"Logged in: **{u_email}**")
@@ -114,37 +105,41 @@ if u_role == 'agency':
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
 
-    # --- FORECASTING MODULE ---
-    elif page == "🔮 Forecasting":
-        st.title("🔮 Future Revenue Forecast")
-        if not df.empty:
-            total_billed = df['amount'].sum()
-            total_paid = df[df['status'] == 'Paid']['amount'].sum()
-            eff_rate = (total_paid / total_billed) if total_billed > 0 else 0
-            
-            st.subheader("Collection Predictor")
-            pending_total = df[df['status'] == 'Pending']['amount'].sum()
-            predicted_collection = pending_total * eff_rate
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Total Pending", f"${pending_total:,.2f}")
-            c2.metric("Predicted Realized Cash", f"${predicted_collection:,.2f}", delta=f"Based on {eff_rate:.1%} collection rate")
-            
-            st.divider()
-            st.subheader("Client Lifetime Value (CLV)")
-            clv_df = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
-            st.bar_chart(data=clv_df, x='client_name', y='amount')
-            st.table(clv_df)
-
-    # --- REMAINING TABS (PROFIT INTEL, DATA ENTRY, ETC) ---
+    # --- ADVANCED PROFIT INTEL ---
     elif page == "📈 Profit Intel":
-        st.title("📈 Profit Intel")
+        st.title("📈 Revenue Intelligence Hub")
         if not df.empty:
-            total_paid = df[df['status'] == 'Paid']['amount'].sum()
-            st.metric("Liquid Cash", f"${total_paid:,.2f}")
-            if st.button("Generate CFO Strategy"):
-                st.write(model.generate_content("Give a CFO strategy for an agency based on current collections.").text)
+            st.subheader("Client Health Scores")
+            # Calculate health based on status
+            health = df.groupby('client_name')['status'].apply(lambda x: (x == 'Paid').sum() / len(x)).reset_index()
+            health.columns = ['Client', 'Payment Consistency']
+            
+            def get_grade(score):
+                if score >= 0.8: return "🟢 Grade A (Reliable)"
+                if score >= 0.5: return "🟡 Grade B (Average)"
+                return "🔴 Grade C (High Risk)"
+            
+            health['Risk Level'] = health['Payment Consistency'].apply(get_grade)
+            st.table(health)
 
+            st.divider()
+            st.subheader("🗓️ Sunday Executive Digest")
+            if st.button("🪄 Generate This Week's Win Report"):
+                # In a real app, you'd filter by a 'updated_at' column for the last 7 days
+                paid_this_week = df[df['status'] == 'Paid']['amount'].sum()
+                pending_this_week = df[df['status'] == 'Pending']['amount'].sum()
+                prompt = f"Summarize my agency's week: I collected ${paid_this_week} but ${pending_this_week} is still pending. Make it sound motivational and give me a focus for next week."
+                st.info(model.generate_content(prompt).text)
+
+    # --- FORECASTING ---
+    elif page == "🔮 Forecasting":
+        st.title("🔮 Forecasting")
+        if not df.empty:
+            clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
+            st.subheader("Top Profit Contributors (CLV)")
+            st.bar_chart(data=clv, x='client_name', y='amount')
+
+    # --- DATA ENTRY ---
     elif page == "📥 Data Entry":
         st.header("📥 Data Intake")
         t1, t2 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry"])
@@ -167,5 +162,5 @@ if u_role == 'agency':
         if not paid_res.empty: st.table(paid_res[['client_name', 'amount']])
 
     elif page == "👑 Super Admin" and is_admin:
-        st.title("👑 Global Platform Analytics")
-        st.metric("Total Agency Revenue", f"${df['amount'].sum():,.2f}")
+        st.title("👑 Super Admin")
+        st.metric("Total Platform Revenue", f"${df['amount'].sum():,.2f}")
