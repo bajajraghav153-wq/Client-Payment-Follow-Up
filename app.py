@@ -31,7 +31,7 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION ---
+# --- 2. AUTHENTICATION (Login & Register Restored) ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -39,25 +39,40 @@ if st.session_state.user is None:
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.title("🔐 SaaS Gateway")
-        e = st.text_input("Email", key="l_email")
-        p = st.text_input("Password", type="password", key="l_pass")
-        if st.button("Sign In"):
-            try:
-                res = supabase.auth.sign_in_with_password({"email": e, "password": p})
-                st.session_state.user = res.user
-                st.rerun()
-            except: st.error("Login Failed. Check Supabase 'Confirm Email' setting.")
+        # RESTORING THE TABS HERE
+        auth_tab1, auth_tab2 = st.tabs(["Login", "Register"])
+        
+        with auth_tab1:
+            e = st.text_input("Email", key="l_email")
+            p = st.text_input("Password", type="password", key="l_pass")
+            if st.button("Sign In"):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                    st.session_state.user = res.user
+                    st.rerun()
+                except: st.error("Login Failed. Ensure email is confirmed or 'Confirm Email' is OFF in Supabase.")
+        
+        with auth_tab2:
+            re = st.text_input("New Email", key="reg_email")
+            rp = st.text_input("New Password", type="password", key="reg_pass")
+            if st.button("Create Account"):
+                try:
+                    res = supabase.auth.sign_up({"email": re, "password": rp})
+                    # Immediately create a profile for the new user
+                    supabase.table("profiles").insert({"id": res.user.id, "role": "agency"}).execute()
+                    st.success("Account created! You can now login.")
+                except: st.error("Registration failed. Email might already be in use.")
     st.stop()
 
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# --- 3. ROLE DETECTION (Raghav Master Override) ---
+# --- 3. ROLE DETECTION (Agency Persistence) ---
 prof_res = supabase.table("profiles").select("*").eq("id", u_id).single().execute()
 u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
 is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-# Hardcode Override to ensure your tabs never disappear
+# Hardcode Override for your email
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 
@@ -79,7 +94,7 @@ with st.sidebar:
         st.success("Profile Updated!"); st.rerun()
 
     st.divider()
-    # Explicitly define navigation based on role
+    # Explicitly force these navigation options for Agency role
     if u_role == 'agency':
         nav = ["📊 Dashboard", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
@@ -102,13 +117,13 @@ if u_role == 'agency':
                     c1, c2, c3 = st.columns([2, 2, 1])
                     with c1:
                         if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
-                            ai_res = model.generate_content(f"Write a reminder for {row['client_name']} regarding ${row['amount']}.").text
-                            supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
+                            ai_msg = model.generate_content(f"Write a reminder for {row['client_name']} regarding ${row['amount']}.").text
+                            supabase.table("invoices").update({"last_draft": ai_msg}).eq("id", row['id']).execute(); st.rerun()
                         st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
                     with c2:
                         if row.get('phone'):
                             p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                            wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, nudge for payment."
+                            wa_url = f"https://wa.me/{p_clean}?text=Hi {row['client_name']}, friendly nudge for payment."
                             st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;cursor:pointer;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                     with c3:
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
@@ -119,7 +134,7 @@ if u_role == 'agency':
         st.header("📥 Multi-Channel Data Intake")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV"])
         with t2:
-            with st.form("manual_entry_form", clear_on_submit=True):
+            with st.form("manual_entry_restore", clear_on_submit=True):
                 cn = st.text_input("Client Name"); ce = st.text_input("Client Email"); cp = st.text_input("Phone")
                 ca = st.number_input("Amount", min_value=0.0); cd = st.date_input("Due Date")
                 if st.form_submit_button("💾 Save Invoice"):
@@ -130,7 +145,7 @@ if u_role == 'agency':
         st.header("📜 Completed Transactions")
         res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
         if res.data: st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'status']])
-        else: st.info("No paid invoices found yet.")
+        else: st.info("No history yet.")
 
     elif page == "👑 Super Admin" and is_admin:
         st.title("👑 Global Analytics")
