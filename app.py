@@ -8,8 +8,8 @@ import json
 import io
 from datetime import date, datetime, timedelta
 
-# --- 1. CONFIG & THEME (2026 Compliant) ---
-st.set_page_config(page_title="CashFlow Pro Intelligence", layout="wide", page_icon="🚀")
+# --- 1. UI & THEME (2026 Compliant) ---
+st.set_page_config(page_title="CashFlow Pro Elite", layout="wide", page_icon="🚀")
 
 st.markdown("""
     <style>
@@ -31,7 +31,7 @@ def init_all():
 
 supabase, model = init_all()
 
-# --- 2. AUTHENTICATION ---
+# --- 2. AUTHENTICATION (Master Protected) ---
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -52,13 +52,13 @@ if st.session_state.user is None:
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# --- 3. MASTER ROLE ENFORCEMENT ---
+# --- 3. HARD-CODED ROLE ENFORCEMENT ---
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
     u_role, is_admin = 'client', False
 
-# --- 4. SIDEBAR NAVIGATION (7-TAB ELITE MENU) ---
+# --- 4. SIDEBAR NAVIGATION (THE ELITE SEVEN) ---
 with st.sidebar:
     st.title("🏦 Revenue Master")
     st.write(f"Logged in: **{u_email}**")
@@ -72,81 +72,105 @@ with st.sidebar:
 res = supabase.table("invoices").select("*").eq("user_id", u_id).execute()
 df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
-# --- 5. ENHANCED PROFIT INTEL MODULE ---
-if page == "📈 Profit Intel":
-    st.title("📈 Advanced Profit Intelligence")
-    if not df.empty:
-        # Core Calculations
-        total_billed = df['amount'].sum()
-        total_paid = df[df['status'] == 'Paid']['amount'].sum()
-        total_pending = total_billed - total_paid
-        eff_rate = (total_paid / total_billed) * 100 if total_billed > 0 else 0
-        
-        # Row 1: Key Metrics
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Collection Efficiency", f"{eff_rate:.1f}%")
-        m2.metric("Liquid Cash (Paid)", f"${total_paid:,.2f}")
-        m3.metric("Pending Revenue", f"${total_pending:,.2f}")
-        
-        st.divider()
-        
-        # Row 2: Debt Aging Analysis
-        st.subheader("🗓️ Outstanding Debt Aging")
-        df['due_date_dt'] = pd.to_datetime(df['due_date']).dt.date
-        today = date.today()
-        
-        pending_df = df[df['status'] == 'Pending'].copy()
-        if not pending_df.empty:
-            pending_df['days_late'] = pending_df['due_date_dt'].apply(lambda x: (today - x).days if x < today else 0)
-            
-            aging_30 = pending_df[pending_df['days_late'] > 30]['amount'].sum()
-            aging_60 = pending_df[pending_df['days_late'] > 60]['amount'].sum()
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Over 30 Days Late", f"${aging_30:,.2f}", delta="Needs Attention", delta_color="inverse")
-            c2.metric("Over 60 Days Late", f"${aging_60:,.2f}", delta="Critical Risk", delta_color="inverse")
-            
-            st.write("### Late Payer Breakdown")
-            st.dataframe(pending_df[pending_df['days_late'] > 0][['client_name', 'amount', 'days_late']], width='stretch')
-        
-        st.divider()
-        
-        # Row 3: AI Profit Growth Strategy
-        st.subheader("🪄 AI Growth Strategy Generator")
-        if st.button("Generate CFO Action Plan"):
-            with st.spinner("AI analyzing your liquidity..."):
-                prompt = f"""
-                Act as a CFO. I have ${total_paid} in cash and ${total_pending} stuck in pending invoices. 
-                Efficiency is {eff_rate:.1f}%. My biggest late debt is {aging_30} over 30 days. 
-                Provide a 3-step professional plan to maximize profit and collect faster.
-                """
-                strategy = model.generate_content(prompt).text
-                st.info(strategy)
-    else:
-        st.info("No data available. Add invoices to unlock Profit Intel.")
+# --- 5. PAGE MODULES ---
 
-# --- 6. OTHER MODULES (DASHBOARD, AUTOMATION, ETC) ---
-elif page == "📊 Dashboard":
-    st.title("💸 Active Ledger")
-    # ... (Dashboard Logic Restored)
+if page == "📊 Dashboard":
+    st.title("💸 Active Collections")
+    if not df.empty:
+        pending = df[df['status'] == 'Pending']
+        m1, m2 = st.columns(2)
+        m1.metric("Pending Total", f"${pending['amount'].sum():,.2f}")
+        m2.metric("Collected Total", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
+        for i, row in pending.iterrows():
+            due_raw = row.get('due_date')
+            tag = f"🚨 {(date.today() - date.fromisoformat(due_raw)).days} Days Overdue" if due_raw and date.fromisoformat(due_raw) < date.today() else "🗓️ Current"
+            with st.expander(f"{tag} | 📋 {row['client_name']} — ${row['amount']}"):
+                c1, c2, c3 = st.columns([2, 2, 1])
+                with c1:
+                    if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
+                        ai_res = model.generate_content(f"Draft a nudge for {row['client_name']} for ${row['amount']}.").text
+                        supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
+                    st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
+                with c2:
+                    if row.get('phone'):
+                        p_clean = "".join(filter(str.isdigit, str(row['phone'])))
+                        wa_url = f"https://wa.me/{p_clean}?text=Friendly nudge for payment."
+                        st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
+                with c3:
+                    if st.button("✅ Paid", key=f"p_{row['id']}"):
+                        supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
 
 elif page == "🤖 Automation Hub":
     st.title("🤖 Bulk Automation Hub")
-    # ... (Automation Logic Restored)
+    if not df.empty:
+        df['due_date_dt'] = pd.to_datetime(df['due_date']).dt.date
+        overdue = df[(df['status'] == 'Pending') & (df['due_date_dt'] < date.today())]
+        st.metric("Targeted Overdue", len(overdue))
+        if not overdue.empty:
+            st.dataframe(overdue[['client_name', 'amount', 'due_date']], width='stretch')
+            if st.button("🚀 Trigger Bulk Nudges"):
+                for _, r in overdue.iterrows():
+                    p_clean = "".join(filter(str.isdigit, str(r['phone'])))
+                    wa_url = f"https://wa.me/{p_clean}?text=" + urllib.parse.quote(f"Invoice for ${r['amount']} is overdue.")
+                    st.markdown(f'<a href="{wa_url}" target="_blank">📲 Nudge {r["client_name"]}</a>', unsafe_allow_html=True)
+
+elif page == "📈 Profit Intel":
+    st.title("📈 Advanced Profit Intelligence")
+    if not df.empty:
+        total_billed = df['amount'].sum()
+        total_paid = df[df['status'] == 'Paid']['amount'].sum()
+        eff_rate = (total_paid / total_billed) * 100 if total_billed > 0 else 0
+        c1, c2 = st.columns(2)
+        c1.metric("Collection Efficiency", f"{eff_rate:.1f}%")
+        c2.metric("Liquid Cash", f"${total_paid:,.2f}")
+        
+        st.subheader("🗓️ Debt Aging")
+        df['days_late'] = pd.to_datetime(df['due_date']).dt.date.apply(lambda x: (date.today() - x).days if x < date.today() else 0)
+        st.dataframe(df[df['status'] == 'Pending'][['client_name', 'amount', 'days_late']], width='stretch')
+        
+        if st.button("Generate CFO Strategy"):
+            st.write(model.generate_content(f"Analyze ${total_paid} collected vs ${total_billed} billed.").text)
 
 elif page == "🔮 Forecasting":
-    st.title("🔮 Revenue Forecasting")
-    # ... (Forecasting Logic Restored)
+    st.title("🔮 Forecasting & CLV")
+    if not df.empty:
+        clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
+        st.bar_chart(data=clv, x='client_name', y='amount')
+        st.dataframe(clv, width='stretch')
 
 elif page == "📥 Data Entry":
-    st.header("📥 Multi-Channel Data Intake")
+    st.header("📥 Data Intake")
     t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
-    # ... (Data Entry logic including Payment Link Restored)
+    with t1:
+        img = st.file_uploader("Upload Image", type=['png','jpg','jpeg'], key="up_ai")
+        if img and st.button("🚀 Process"):
+            res_ai = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img)])
+            data = json.loads(res_ai.text.replace("```json","").replace("```",""))
+            data.update({"user_id": u_id, "status": "Pending", "due_date": str(date.today())})
+            supabase.table("invoices").insert(data).execute(); st.rerun()
+    with t2:
+        with st.form("manual"):
+            cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone")
+            ca = st.number_input("Amount"); cd = st.date_input("Due Date"); pl = st.text_input("Payment Link")
+            if st.form_submit_button("Save"):
+                supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id":u_id, "payment_link":pl, "status":"Pending"}).execute(); st.rerun()
+    with t3:
+        csv = st.file_uploader("Upload CSV", type="csv")
+        if csv and st.button("Confirm Import"):
+            df_c = pd.read_csv(csv)
+            recs = df_c.to_dict(orient='records')
+            for r in recs: r.update({"user_id": u_id, "status": "Pending"})
+            supabase.table("invoices").insert(recs).execute(); st.rerun()
 
 elif page == "📜 History":
-    st.header("📜 Paid History")
-    # ... (History Logic Restored)
+    st.header("📜 Completed Transactions")
+    paid_res = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
+    if not paid_res.empty: st.dataframe(paid_res[['client_name', 'amount', 'due_date']], width='stretch')
 
 elif page == "👑 Super Admin" and is_admin:
-    st.title("👑 Global Platform Analytics")
-    # ... (Super Admin Logic Restored)
+    st.title("👑 Global Analytics")
+    all_r = supabase.table("invoices").select("*").execute()
+    if all_r.data:
+        df_all = pd.DataFrame(all_r.data)
+        st.metric("Total Platform Revenue", f"${df_all['amount'].sum():,.2f}")
+        st.bar_chart(df_all.groupby('client_name')['amount'].sum())
