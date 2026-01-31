@@ -64,7 +64,6 @@ u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
 # --- 3. MASTER ROLE ENFORCEMENT ---
-# Forced override for Raghav's email to ensure Agency view is always visible
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
@@ -80,15 +79,15 @@ with st.sidebar:
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
 
-    # Define Navigation specifically to ensure features are present
     if u_role == 'agency':
-        nav = ["📊 Dashboard", "📥 Data Entry", "📜 History", "🤖 Automation Hub", "👑 Super Admin"]
+        nav = ["📊 Dashboard", "🤖 Automation Hub", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
         nav = ["📋 My Invoices"]
     page = st.radio("Navigation", nav)
 
 # --- 5. AGENCY PAGES ---
 if u_role == 'agency':
+    # --- DASHBOARD ---
     if page == "📊 Dashboard":
         st.title("💸 Active Collections")
         res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("is_deleted", False).execute()
@@ -96,66 +95,82 @@ if u_role == 'agency':
         if not df.empty:
             pending = df[df['status'] == 'Pending']
             m1, m2 = st.columns(2)
-            m1.metric("Pending Total", f"${pending['amount'].sum():,.2f}")
+            m1.metric("Pending Invoices", len(pending))
             m2.metric("Collected Total", f"${df[df['status'] == 'Paid']['amount'].sum():,.2f}")
             for i, row in pending.iterrows():
-                due_raw = row.get('due_date')
-                tag = f"🚨 {(date.today() - date.fromisoformat(due_raw)).days} Days Overdue" if due_raw and date.fromisoformat(due_raw) < date.today() else "🗓️ Current"
-                with st.expander(f"{tag} | 📋 {row['client_name']} — ${row['amount']}"):
+                with st.expander(f"📋 {row['client_name']} — ${row['amount']}"):
                     c1, c2, c3 = st.columns([2, 2, 1])
                     with c1:
                         if st.button("🪄 AI Draft", key=f"ai_{row['id']}"):
-                            ai_res = model.generate_content(f"Reminder for {row['client_name']} regarding ${row['amount']}.").text
+                            ai_res = model.generate_content(f"Reminder for {row['client_name']} for ${row['amount']}").text
                             supabase.table("invoices").update({"last_draft": ai_res}).eq("id", row['id']).execute(); st.rerun()
                         st.text_area("Draft:", value=row.get('last_draft', ""), height=100, key=f"t_{row['id']}")
                     with c2:
                         if row.get('phone'):
                             p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                            wa_url = f"https://wa.me/{p_clean}?text=Friendly nudge for payment."
+                            wa_url = f"https://wa.me/{p_clean}?text=Nudge for payment."
                             st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                     with c3:
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-        else: st.info("Dashboard empty. Add data in 'Data Entry'.")
+        else: st.info("No active invoices.")
 
+    # --- AUTOMATION HUB ---
+    elif page == "🤖 Automation Hub":
+        st.title("🤖 Bulk Automation Hub")
+        res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Pending").execute()
+        if res.data:
+            df_auto = pd.DataFrame(res.data)
+            # Find overdue invoices
+            overdue = df_auto[pd.to_datetime(df_auto['due_date']).dt.date < date.today()]
+            st.metric("Overdue Clients Detected", len(overdue))
+            if not overdue.empty:
+                st.dataframe(overdue[['client_name', 'amount', 'due_date']])
+                if st.button("🚀 Trigger Bulk WhatsApp Queue"):
+                    for _, r in overdue.iterrows():
+                        p_clean = "".join(filter(str.isdigit, str(r['phone'])))
+                        pay_link = r.get('payment_link', '')
+                        msg = f"Hi {r['client_name']}, payment for ${r['amount']} is overdue. Pay here: {pay_link}"
+                        wa_url = f"https://wa.me/{p_clean}?text={urllib.parse.quote(msg)}"
+                        st.markdown(f'<a href="{wa_url}" target="_blank">Open Chat for {r["client_name"]}</a>', unsafe_allow_html=True)
+            else: st.success("Everything is on schedule!")
+        else: st.info("No pending invoices found.")
+
+    # --- DATA ENTRY ---
     elif page == "📥 Data Entry":
         st.header("📥 Multi-Channel Data Intake")
-        t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
-        
-        with t1: # AI Scanner Restored
-            img_f = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
-            if img_f and st.button("🚀 Process Image"):
+        t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV"])
+        with t1:
+            img_f = st.file_uploader("Scan Image", type=['png','jpg','jpeg'])
+            if img_f and st.button("🚀 Process"):
                 res = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img_f)])
                 data = json.loads(res.text.replace("```json","").replace("```",""))
                 data.update({"user_id": u_id, "status": "Pending"})
-                supabase.table("invoices").insert(data).execute(); st.success("AI Saved!"); st.rerun()
-        
-        with t2: # Manual Entry
-            with st.form("manual_form"):
-                cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone")
-                ca = st.number_input("Amount"); cd = st.date_input("Due Date"); pl = st.text_input("Payment Link")
+                supabase.table("invoices").insert(data).execute(); st.success("AI Extracted!"); st.rerun()
+        with t2:
+            with st.form("man_entry"):
+                cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone"); ca = st.number_input("Amount"); cd = st.date_input("Due Date"); pl = st.text_input("Payment Link")
                 if st.form_submit_button("Save"):
-                    supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id": u_id, "payment_link":pl}).execute(); st.rerun()
-        
-        with t3: # Bulk CSV Upload
+                    supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id":u_id, "payment_link":pl}).execute(); st.rerun()
+        with t3:
             csv_f = st.file_uploader("Upload CSV", type="csv")
             if csv_f:
                 df_csv = pd.read_csv(csv_f)
-                st.dataframe(df_csv.head())
                 if st.button("Confirm Bulk Import"):
                     recs = df_csv.to_dict(orient='records')
                     for r in recs: r.update({"user_id": u_id, "status": "Pending"})
                     supabase.table("invoices").insert(recs).execute(); st.success("Imported!"); st.rerun()
 
-    elif page == "📜 History": # History Logic Restored
+    # --- HISTORY ---
+    elif page == "📜 History":
         st.header("📜 Completed Transactions")
-        hist_res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
-        if hist_res.data:
-            st.table(pd.DataFrame(hist_res.data)[['client_name', 'amount', 'due_date']])
-        else: st.info("No paid history found.")
+        res = supabase.table("invoices").select("*").eq("user_id", u_id).eq("status", "Paid").execute()
+        if res.data: st.table(pd.DataFrame(res.data)[['client_name', 'amount', 'due_date']])
+        else: st.info("No paid history.")
 
-    elif page == "👑 Super Admin" and is_admin: # Super Admin Logic
-        st.title("👑 Global Platform Analytics")
+    # --- SUPER ADMIN ---
+    elif page == "👑 Super Admin" and is_admin:
+        st.title("👑 Global Analytics")
         all_res = supabase.table("invoices").select("*").execute()
         if all_res.data:
             df_all = pd.DataFrame(all_res.data)
