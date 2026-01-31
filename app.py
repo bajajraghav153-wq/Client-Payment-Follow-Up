@@ -7,7 +7,7 @@ import urllib.parse
 import json
 from datetime import date, datetime, timedelta
 
-# --- 1. CONFIG & THEME ---
+# --- 1. UI & THEME ---
 st.set_page_config(page_title="CashFlow Pro Intelligence", layout="wide", page_icon="🚀")
 
 st.markdown("""
@@ -53,7 +53,7 @@ if st.session_state.user is None:
 u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
-# Master Override
+# --- 3. MASTER ROLE ENFORCEMENT ---
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
@@ -61,24 +61,26 @@ else:
     u_role = prof_res.data.get("role", "client") if prof_res.data else "client"
     is_admin = prof_res.data.get("is_admin", False) if prof_res.data else False
 
-# --- 3. SIDEBAR ---
+# --- 4. SIDEBAR NAVIGATION (ALL MODULES RESTORED) ---
 with st.sidebar:
     st.title("🏦 Revenue Master")
     st.write(f"Logged in: **{u_email}**")
     if st.button("Logout"):
         supabase.auth.sign_out(); st.session_state.user = None; st.rerun()
     st.divider()
+    
     if u_role == 'agency':
-        nav = ["📊 Dashboard", "📈 Profit Intel", "🔮 Forecasting", "🤖 Automation Hub", "📥 Data Entry", "📜 History", "👑 Super Admin"]
+        nav = ["📊 Dashboard", "🤖 Automation Hub", "📈 Profit Intel", "🔮 Forecasting", "📥 Data Entry", "📜 History", "👑 Super Admin"]
     else:
         nav = ["📋 My Invoices"]
     page = st.radio("Navigation", nav)
 
-# --- 4. AGENCY PAGES ---
-if u_role == 'agency':
-    res = supabase.table("invoices").select("*").eq("user_id", u_id).execute()
-    df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
+# Load Data once for all pages
+res = supabase.table("invoices").select("*").eq("user_id", u_id).execute()
+df = pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
+# --- 5. PAGE LOGIC ---
+if u_role == 'agency':
     if page == "📊 Dashboard":
         st.title("💸 Active Collections")
         if not df.empty:
@@ -99,68 +101,66 @@ if u_role == 'agency':
                     with c2:
                         if row.get('phone'):
                             p_clean = "".join(filter(str.isdigit, str(row['phone'])))
-                            wa_url = f"https://wa.me/{p_clean}?text=Nudge for payment."
+                            wa_url = f"https://wa.me/{p_clean}?text=Friendly nudge for payment."
                             st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;width:100%;padding:10px;border-radius:10px;border:none;">📱 WhatsApp</button></a>', unsafe_allow_html=True)
                     with c3:
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
 
-    # --- ADVANCED PROFIT INTEL ---
-    elif page == "📈 Profit Intel":
-        st.title("📈 Revenue Intelligence Hub")
+    elif page == "🤖 Automation Hub":
+        st.title("🤖 Bulk WhatsApp Nudges")
         if not df.empty:
-            st.subheader("Client Health Scores")
-            # Calculate health based on status
-            health = df.groupby('client_name')['status'].apply(lambda x: (x == 'Paid').sum() / len(x)).reset_index()
-            health.columns = ['Client', 'Payment Consistency']
-            
-            def get_grade(score):
-                if score >= 0.8: return "🟢 Grade A (Reliable)"
-                if score >= 0.5: return "🟡 Grade B (Average)"
-                return "🔴 Grade C (High Risk)"
-            
-            health['Risk Level'] = health['Payment Consistency'].apply(get_grade)
-            st.table(health)
+            overdue = df[(df['status'] == 'Pending') & (pd.to_datetime(df['due_date']).dt.date < date.today())]
+            st.metric("Overdue Clients Found", len(overdue))
+            if st.button("🚀 Prepare Bulk WhatsApp Queue"):
+                for _, r in overdue.iterrows():
+                    p_clean = "".join(filter(str.isdigit, str(r['phone'])))
+                    wa_url = f"https://wa.me/{p_clean}?text=" + urllib.parse.quote(f"Hi {r['client_name']}, your invoice for ${r['amount']} is overdue.")
+                    st.markdown(f'<a href="{wa_url}" target="_blank">Nudge {r["client_name"]}</a>', unsafe_allow_html=True)
 
-            st.divider()
-            st.subheader("🗓️ Sunday Executive Digest")
-            if st.button("🪄 Generate This Week's Win Report"):
-                # In a real app, you'd filter by a 'updated_at' column for the last 7 days
-                paid_this_week = df[df['status'] == 'Paid']['amount'].sum()
-                pending_this_week = df[df['status'] == 'Pending']['amount'].sum()
-                prompt = f"Summarize my agency's week: I collected ${paid_this_week} but ${pending_this_week} is still pending. Make it sound motivational and give me a focus for next week."
-                st.info(model.generate_content(prompt).text)
+    elif page == "📈 Profit Intel":
+        st.title("📈 Profit Intelligence")
+        if not df.empty:
+            paid_sum = df[df['status'] == 'Paid']['amount'].sum()
+            st.metric("Liquid Cash Collected", f"${paid_sum:,.2f}")
+            if st.button("🪄 Weekly Win Report"):
+                st.write(model.generate_content("Summarize my agency's week: I collected ${paid_sum}. Give 3 tips for growth.").text)
 
-    # --- FORECASTING ---
     elif page == "🔮 Forecasting":
-        st.title("🔮 Forecasting")
+        st.title("🔮 Revenue Forecasting")
         if not df.empty:
             clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
-            st.subheader("Top Profit Contributors (CLV)")
+            st.subheader("Top Profit Contributors (Lifetime Value)")
             st.bar_chart(data=clv, x='client_name', y='amount')
 
-    # --- DATA ENTRY ---
     elif page == "📥 Data Entry":
-        st.header("📥 Data Intake")
-        t1, t2 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry"])
+        st.header("📥 Multi-Channel Intake")
+        t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
         with t1:
-            img = st.file_uploader("Upload", type=['png','jpg','jpeg'])
-            if img and st.button("Process"):
+            img = st.file_uploader("Upload Image", type=['png','jpg','jpeg'])
+            if img and st.button("🚀 Process"):
                 res = model.generate_content(["Extract client_name, email, phone, amount as JSON.", Image.open(img)])
                 data = json.loads(res.text.replace("```json","").replace("```",""))
                 data.update({"user_id": u_id, "status": "Pending"})
                 supabase.table("invoices").insert(data).execute(); st.rerun()
         with t2:
-            with st.form("man"):
+            with st.form("manual"):
                 cn = st.text_input("Name"); ce = st.text_input("Email"); cp = st.text_input("Phone"); ca = st.number_input("Amount"); cd = st.date_input("Due Date")
                 if st.form_submit_button("Save"):
                     supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id": u_id}).execute(); st.rerun()
+        with t3:
+            csv_f = st.file_uploader("Upload CSV", type="csv")
+            if csv_f and st.button("Confirm Bulk Import"):
+                df_csv = pd.read_csv(csv_f)
+                recs = df_csv.to_dict(orient='records')
+                for r in recs: r.update({"user_id": u_id, "status": "Pending"})
+                supabase.table("invoices").insert(recs).execute(); st.success("Imported!"); st.rerun()
 
     elif page == "📜 History":
-        st.header("📜 Completed")
+        st.header("📜 Completed Transactions")
         paid_res = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
-        if not paid_res.empty: st.table(paid_res[['client_name', 'amount']])
+        if not paid_res.empty: st.table(paid_res[['client_name', 'amount', 'due_date']])
 
     elif page == "👑 Super Admin" and is_admin:
-        st.title("👑 Super Admin")
+        st.title("👑 Global Analytics")
         st.metric("Total Platform Revenue", f"${df['amount'].sum():,.2f}")
