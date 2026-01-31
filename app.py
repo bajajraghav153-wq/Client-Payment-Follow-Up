@@ -53,7 +53,6 @@ u_id = st.session_state.user.id
 u_email = st.session_state.user.email
 
 # --- 3. HARD-CODED ROLE ENFORCEMENT ---
-# This prevents the "Nothing Came" error by bypassing database lag
 if u_email == 'ramanbajaj154@gmail.com':
     u_role, is_admin = 'agency', True
 else:
@@ -106,17 +105,16 @@ if u_role == 'agency':
                     with c3:
                         if st.button("✅ Paid", key=f"p_{row['id']}"):
                             supabase.table("invoices").update({"status": "Paid"}).eq("id", row['id']).execute(); st.rerun()
-        else: st.info("Dashboard is empty. Start by adding data.")
 
-    elif page == "🔮 Forecasting": # RESTORED
+    elif page == "🔮 Forecasting":
         st.title("🔮 Forecasting & CLV")
         if not df.empty:
             clv = df.groupby('client_name')['amount'].sum().sort_values(ascending=False).reset_index()
             st.subheader("Client Lifetime Value (Top Contributors)")
             st.bar_chart(data=clv, x='client_name', y='amount')
-            st.table(clv)
+            st.dataframe(clv, width='stretch') # Updated to 2026 syntax
 
-    elif page == "📥 Data Entry": # RESTORED AI SCANNER & BULK
+    elif page == "📥 Data Entry":
         st.header("📥 Multi-Channel Intake")
         t1, t2, t3 = st.tabs(["📸 AI Scanner", "⌨️ Manual Entry", "📤 Bulk CSV Upload"])
         with t1:
@@ -134,20 +132,21 @@ if u_role == 'agency':
                     supabase.table("invoices").insert({"client_name":cn, "email":ce, "phone":cp, "amount":ca, "due_date":str(cd), "user_id":u_id, "payment_link":pl, "status":"Pending"}).execute(); st.rerun()
         with t3:
             csv = st.file_uploader("Upload CSV", type="csv", key="up_csv")
-            if csv and st.button("Confirm Bulk Import"):
+            if csv:
                 df_c = pd.read_csv(csv)
-                recs = df_c.to_dict(orient='records')
-                for r in recs: r.update({"user_id": u_id, "status": "Pending"})
-                supabase.table("invoices").insert(recs).execute(); st.success("Imported!"); st.rerun()
+                st.dataframe(df_c.head(), width='stretch') # Updated
+                if st.button("Confirm Bulk Import"):
+                    recs = df_c.to_dict(orient='records')
+                    for r in recs: r.update({"user_id": u_id, "status": "Pending"})
+                    supabase.table("invoices").insert(recs).execute(); st.success("Imported!"); st.rerun()
 
-    elif page == "📜 History": # RESTORED
+    elif page == "📜 History":
         st.header("📜 Completed Transactions")
         paid_df = df[df['status'] == 'Paid'] if not df.empty else pd.DataFrame()
         if not paid_df.empty:
-            st.table(paid_df[['client_name', 'amount', 'due_date']])
-        else: st.info("No history records found.")
+            st.dataframe(paid_df[['client_name', 'amount', 'due_date']], width='stretch') # Updated
 
-    elif page == "👑 Super Admin" and is_admin: # RESTORED
+    elif page == "👑 Super Admin" and is_admin:
         st.title("👑 Global Analytics")
         all_r = supabase.table("invoices").select("*").execute()
         if all_r.data:
